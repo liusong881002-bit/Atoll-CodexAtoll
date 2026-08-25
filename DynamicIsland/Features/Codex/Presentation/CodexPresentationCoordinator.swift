@@ -8,6 +8,7 @@ final class CodexPresentationCoordinator {
     private let notchExperienceManager: ExtensionNotchExperienceManager
     private var latestSnapshot: CodexTaskStoreSnapshot = .empty
     private var latestIgnoredSessionIDs: Set<String> = []
+    private var latestLivenessPolicy = CodexTaskLivenessPolicy()
     private var pulseGate = CodexPresentationPulseGate()
     private var restoreTask: Task<Void, Never>?
 
@@ -26,10 +27,12 @@ final class CodexPresentationCoordinator {
         runningSessionIDs: [String] = [],
         completionSessionIDs: [String] = [],
         ignoredSessionIDs: Set<String> = [],
+        livenessPolicy: CodexTaskLivenessPolicy = .init(),
         interruptActivePulse: Bool = false
     ) {
         latestSnapshot = snapshot
         latestIgnoredSessionIDs = ignoredSessionIDs
+        latestLivenessPolicy = livenessPolicy
         if interruptActivePulse {
             restoreTask?.cancel()
             restoreTask = nil
@@ -92,7 +95,9 @@ final class CodexPresentationCoordinator {
         let presentation = builder.build(
             from: snapshot,
             context: context,
-            ignoredSessionIDs: ignoredSessionIDs ?? latestIgnoredSessionIDs
+            ignoredSessionIDs: ignoredSessionIDs ?? latestIgnoredSessionIDs,
+            now: Date(),
+            livenessPolicy: latestLivenessPolicy
         )
 
         if Defaults[.codexShowClosedStatus], let live = presentation.liveActivity {

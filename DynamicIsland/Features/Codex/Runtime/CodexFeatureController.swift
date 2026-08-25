@@ -121,13 +121,16 @@ final class CodexFeatureController: ObservableObject {
                 effects.append(contentsOf: self.store.apply(envelope))
             }
             effects.append(contentsOf: store.performMaintenance())
-            try repository.save(store.snapshot)
+            if effects.contains(.persist) {
+                try repository.save(store.snapshot)
+            }
             snapshot = store.snapshot
             refreshInstallationState()
             diagnostics = try DiagnosticsCollector(paths: paths).collect(
                 snapshot: snapshot,
                 helperPath: helperInstallation?.helperPath,
-                helperVersion: helperInstallation?.helperVersion
+                helperVersion: helperInstallation?.helperVersion,
+                livenessPolicy: livenessPolicy
             )
             let completionSessionIDs = Defaults[.codexCompletionNotifications]
                 ? effects.compactMap { effect -> String? in
@@ -145,7 +148,8 @@ final class CodexFeatureController: ObservableObject {
                 snapshot: presentationSnapshot(),
                 runningSessionIDs: runningSessionIDs,
                 completionSessionIDs: completionSessionIDs,
-                ignoredSessionIDs: activityTrayPreferences.ignoredSessionIDs
+                ignoredSessionIDs: activityTrayPreferences.ignoredSessionIDs,
+                livenessPolicy: livenessPolicy
             )
             lastError = nil
         } catch {
@@ -161,6 +165,7 @@ final class CodexFeatureController: ObservableObject {
         presentationCoordinator.update(
             snapshot: presentationSnapshot(),
             ignoredSessionIDs: activityTrayPreferences.ignoredSessionIDs,
+            livenessPolicy: livenessPolicy,
             interruptActivePulse: true
         )
     }
@@ -176,6 +181,7 @@ final class CodexFeatureController: ObservableObject {
             presentationCoordinator.update(
                 snapshot: presentationSnapshot(),
                 ignoredSessionIDs: activityTrayPreferences.ignoredSessionIDs,
+                livenessPolicy: livenessPolicy,
                 interruptActivePulse: true
             )
             lastError = nil
@@ -273,7 +279,8 @@ final class CodexFeatureController: ObservableObject {
             snapshot = store.snapshot
             presentationCoordinator.update(
                 snapshot: presentationSnapshot(),
-                ignoredSessionIDs: activityTrayPreferences.ignoredSessionIDs
+                ignoredSessionIDs: activityTrayPreferences.ignoredSessionIDs,
+                livenessPolicy: livenessPolicy
             )
             lastError = nil
         } catch {
@@ -326,6 +333,10 @@ final class CodexFeatureController: ObservableObject {
         )
     }
 
+    var livenessPolicy: CodexTaskLivenessPolicy {
+        CodexTaskLivenessPolicy(preferences: store.preferences)
+    }
+
     func setProjectPinned(_ projectName: String, pinned: Bool) {
         var names = Set(Defaults[.codexPinnedProjectNames])
         if pinned {
@@ -348,6 +359,26 @@ final class CodexFeatureController: ObservableObject {
         refreshPresentation()
     }
 
+    func markSessionInterrupted(_ sessionID: String) {
+        guard Defaults[.enableCodexIntegration] else { return }
+        let effects = store.markInterrupted(sessionID: sessionID)
+        guard !effects.isEmpty else { return }
+
+        do {
+            try repository.save(store.snapshot)
+            snapshot = store.snapshot
+            presentationCoordinator.update(
+                snapshot: presentationSnapshot(),
+                ignoredSessionIDs: activityTrayPreferences.ignoredSessionIDs,
+                livenessPolicy: livenessPolicy,
+                interruptActivePulse: true
+            )
+            lastError = nil
+        } catch {
+            lastError = "标记 Codex 任务中断失败：\(error.localizedDescription)"
+        }
+    }
+
     private func enableRuntime(installIfAvailable: Bool) {
         if installIfAvailable && (!hooksInstalled || helperInstallation == nil), bundledHelperURL() != nil {
             installOrRepair()
@@ -355,7 +386,7 @@ final class CodexFeatureController: ObservableObject {
         timer?.invalidate()
         isRunning = true
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refresh()
             }

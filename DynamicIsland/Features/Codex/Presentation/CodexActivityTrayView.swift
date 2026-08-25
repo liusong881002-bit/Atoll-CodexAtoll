@@ -33,7 +33,8 @@ struct CodexActivityTrayView: View {
                 pinnedProjectNames: Set(pinnedProjectNames),
                 ignoredSessionIDs: Set(ignoredSessionIDs),
                 showContentPreviews: showContentPreviews
-            )
+            ),
+            livenessPolicy: controller.livenessPolicy
         )
     }
 
@@ -302,6 +303,12 @@ struct CodexActivityTrayView: View {
             .accessibilityIdentifier("codex-activity-item-\(item.id)")
 
             Menu {
+                if item.canMarkInterrupted {
+                    Button("标记为已中断") {
+                        controller.markSessionInterrupted(item.sessionID)
+                    }
+                    Divider()
+                }
                 Button("暂时忽略此任务") {
                     controller.setSessionIgnored(item.sessionID, ignored: true)
                 }
@@ -402,6 +409,7 @@ private extension CodexActivityBucket {
     var swiftUIColor: Color {
         switch self {
         case .needsAttention: return .orange
+        case .statusUncertain: return .yellow
         case .blocked: return .red
         case .unreadCompleted: return .green
         case .running: return .blue

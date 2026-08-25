@@ -89,6 +89,7 @@ struct CodexSettingsView: View {
     private var diagnosticsSection: some View {
         Section("诊断") {
             LabeledContent("运行任务", value: "\(controller.diagnostics?.runningCount ?? 0)")
+            LabeledContent("状态待确认", value: "\(controller.diagnostics?.statusUncertainCount ?? 0)")
             LabeledContent("等待批准", value: "\(controller.diagnostics?.waitingCount ?? 0)")
             LabeledContent("最近完成", value: "\(controller.diagnostics?.recentCompletionCount ?? 0)")
             LabeledContent("待处理事件", value: "\(controller.diagnostics?.inboxPendingCount ?? 0)")

@@ -157,7 +157,7 @@ struct CodexPresentationTests {
                 )
             ]
         )
-        let mixedStatus = CodexPresentationBuilder().build(from: mixedStatusSnapshot)
+        let mixedStatus = CodexPresentationBuilder().build(from: mixedStatusSnapshot, now: now)
         let completedPriorityWithRunning = CodexPresentationBuilder().build(
             from: CodexTaskStoreSnapshot(
                 savedAt: now,
@@ -171,10 +171,12 @@ struct CodexPresentationTests {
                         completedAt: now.addingTimeInterval(TimeInterval(-index))
                     )
                 }
-            )
+            ),
+            now: now
         )
         let runningOnlyStatus = CodexPresentationBuilder().build(
-            from: CodexTaskStoreSnapshot(savedAt: now, tasks: runningTasks)
+            from: CodexTaskStoreSnapshot(savedAt: now, tasks: runningTasks),
+            now: now
         )
         guard let runningOnlyLiveActivity = runningOnlyStatus.liveActivity,
               let runningOnlyCompactStatus = CodexCompactStatus(
@@ -195,6 +197,46 @@ struct CodexPresentationTests {
             runningOnlyCompactStatus.preferredTrailingWidth == 84
                 && runningOnlyCompactStatus.additionalClosedHeight == 0,
             "default closed status stays narrow without adding notch height"
+        )
+        let uncertainTask = CodexTaskRecord(
+            sessionID: "uncertain-running",
+            projectName: "Atoll-CodexAtoll",
+            promptPreview: "等待状态确认",
+            status: .running,
+            startedAt: now.addingTimeInterval(-8 * 60),
+            lastActivityAt: now.addingTimeInterval(-8 * 60)
+        )
+        let uncertainPresentation = CodexPresentationBuilder().build(
+            from: CodexTaskStoreSnapshot(
+                savedAt: now,
+                tasks: [uncertainTask],
+                recentCompletions: [
+                    CodexCompletionRecord(
+                        sessionID: "uncertain-completion",
+                        projectName: "Atoll-CodexAtoll",
+                        promptPreview: "已完成任务",
+                        resultPreview: "完成结果",
+                        completedAt: now.addingTimeInterval(-30)
+                    )
+                ]
+            ),
+            now: now
+        )
+        try expect(
+            uncertainPresentation.liveActivity?.metadata["codex_running_count"] == "0",
+            "a task awaiting status confirmation no longer contributes to the closed running count"
+        )
+        let customPolicyPresentation = CodexPresentationBuilder().build(
+            from: CodexTaskStoreSnapshot(savedAt: now, tasks: [uncertainTask]),
+            now: now,
+            livenessPolicy: CodexTaskLivenessPolicy(
+                statusConfirmationTimeout: 10 * 60,
+                staleTimeout: 20 * 60
+            )
+        )
+        try expect(
+            customPolicyPresentation.liveActivity?.metadata["codex_running_count"] == "1",
+            "closed status uses the injected runtime liveness policy"
         )
         guard let mixedLiveActivity = mixedStatus.liveActivity else {
             throw TestFailure(message: "mixed running and completed tasks expose a live activity")
@@ -265,7 +307,8 @@ struct CodexPresentationTests {
                     )
                 ]
             ),
-            context: .completionPulse(sessionID: "pulse-completed", completedCount: 1)
+            context: .completionPulse(sessionID: "pulse-completed", completedCount: 1),
+            now: now
         )
         guard let completionPulseLiveActivity = completionPulse.liveActivity else {
             throw TestFailure(message: "completion pulse exposes a live activity")
@@ -283,7 +326,8 @@ struct CodexPresentationTests {
         )
         let runningPulse = CodexPresentationBuilder().build(
             from: mixedStatusSnapshot,
-            context: .runningPulse(sessionID: "running-1")
+            context: .runningPulse(sessionID: "running-1"),
+            now: now
         )
         guard let runningPulseLiveActivity = runningPulse.liveActivity else {
             throw TestFailure(message: "a new conversation exposes a running pulse")
@@ -322,7 +366,8 @@ struct CodexPresentationTests {
         )
         let ignoredPresentation = CodexPresentationBuilder().build(
             from: CodexTaskStoreSnapshot(savedAt: now, tasks: runningTasks),
-            ignoredSessionIDs: ["running-1", "running-2"]
+            ignoredSessionIDs: ["running-1", "running-2"],
+            now: now
         )
         try expect(
             ignoredPresentation.liveActivity == nil,
@@ -399,7 +444,8 @@ struct CodexPresentationTests {
             preferences: CodexActivityTrayPreferences(
                 pinnedProjectNames: ["Project A"],
                 ignoredSessionIDs: ["tray-completed"]
-            )
+            ),
+            now: now
         )
         try expect(
             tray.buckets.map(\.bucket) == [.needsAttention, .blocked, .running],
@@ -418,6 +464,7 @@ struct CodexPresentationTests {
         )
         try expect(
             CodexActivityTrayExpansionPolicy.isExpandedByDefault(.needsAttention)
+                && CodexActivityTrayExpansionPolicy.isExpandedByDefault(.statusUncertain)
                 && CodexActivityTrayExpansionPolicy.isExpandedByDefault(.blocked)
                 && CodexActivityTrayExpansionPolicy.isExpandedByDefault(.unreadCompleted)
                 && CodexActivityTrayExpansionPolicy.isExpandedByDefault(.running)
@@ -449,7 +496,8 @@ struct CodexPresentationTests {
                 savedAt: now,
                 recentCompletions: historyCompletions,
                 acknowledgedCompletionIDs: historyCompletions.map(\.id)
-            )
+            ),
+            now: now
         )
         try expect(
             viewedHistory.buckets.first?.bucket == .readHistory
@@ -481,7 +529,8 @@ struct CodexPresentationTests {
                         completedAt: now
                     )
                 ]
-            )
+            ),
+            now: now
         )
         try expect(
             recoveredHistory.buckets.first?.bucket == .readHistory
@@ -509,7 +558,8 @@ struct CodexPresentationTests {
                 tasks: [runningTasks[0]],
                 recentCompletions: [readCompletion, unreadCompletion],
                 acknowledgedCompletionIDs: [readCompletion.id]
-            )
+            ),
+            now: now
         )
         try expect(
             orderedTray.buckets.map(\.bucket) == [.unreadCompleted, .running, .readHistory],
@@ -548,7 +598,8 @@ struct CodexPresentationTests {
             recentCompletions: [previousTurnCompletion]
         )
         let continuedConversationTray = CodexActivityTrayBuilder().build(
-            from: continuedConversationSnapshot
+            from: continuedConversationSnapshot,
+            now: now
         )
         try expect(
             continuedConversationTray.visibleItemCount == 1
@@ -558,7 +609,8 @@ struct CodexPresentationTests {
         )
 
         let continuedConversationPresentation = CodexPresentationBuilder().build(
-            from: continuedConversationSnapshot
+            from: continuedConversationSnapshot,
+            now: now
         )
         guard let continuedLiveActivity = continuedConversationPresentation.liveActivity,
               let continuedTab = continuedConversationPresentation.notchExperience?.tab else {

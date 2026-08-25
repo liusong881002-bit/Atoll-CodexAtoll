@@ -4,6 +4,7 @@ public struct CodexDiagnosticsSnapshot: Codable, Equatable, Sendable {
     public let generatedAt: Date
     public let activeSessionCount: Int
     public let runningCount: Int
+    public let statusUncertainCount: Int
     public let waitingCount: Int
     public let staleCount: Int
     public let recentCompletionCount: Int
@@ -17,6 +18,7 @@ public struct CodexDiagnosticsSnapshot: Codable, Equatable, Sendable {
         generatedAt: Date = Date(),
         activeSessionCount: Int,
         runningCount: Int,
+        statusUncertainCount: Int = 0,
         waitingCount: Int,
         staleCount: Int,
         recentCompletionCount: Int,
@@ -29,6 +31,7 @@ public struct CodexDiagnosticsSnapshot: Codable, Equatable, Sendable {
         self.generatedAt = generatedAt
         self.activeSessionCount = activeSessionCount
         self.runningCount = runningCount
+        self.statusUncertainCount = statusUncertainCount
         self.waitingCount = waitingCount
         self.staleCount = staleCount
         self.recentCompletionCount = recentCompletionCount
@@ -60,19 +63,29 @@ public struct DiagnosticsCollector {
         snapshot: CodexTaskStoreSnapshot,
         generatedAt: Date = Date(),
         helperPath: String? = nil,
-        helperVersion: String? = nil
+        helperVersion: String? = nil,
+        livenessPolicy: CodexTaskLivenessPolicy = .init()
     ) throws -> CodexDiagnosticsSnapshot {
         let pending = try countJSONFiles(in: paths.inbox)
         let failed = try countJSONFiles(in: paths.failed)
-        let active = snapshot.tasks.filter {
-            $0.status == .running || $0.status == .waitingForApproval
+        let waiting = snapshot.tasks.filter { $0.status == .waitingForApproval }
+        let rawRunning = snapshot.tasks.filter { $0.status == .running }
+        let running = rawRunning.filter {
+            livenessPolicy.liveness(for: $0, now: generatedAt) == .fresh
+        }
+        let statusUncertain = rawRunning.filter {
+            livenessPolicy.liveness(for: $0, now: generatedAt) == .statusUncertain
+        }
+        let derivedStale = rawRunning.filter {
+            livenessPolicy.liveness(for: $0, now: generatedAt) == .stale
         }
         return CodexDiagnosticsSnapshot(
             generatedAt: generatedAt,
-            activeSessionCount: active.count,
-            runningCount: active.filter { $0.status == .running }.count,
-            waitingCount: active.filter { $0.status == .waitingForApproval }.count,
-            staleCount: snapshot.tasks.filter { $0.status == .stale }.count,
+            activeSessionCount: running.count + waiting.count,
+            runningCount: running.count,
+            statusUncertainCount: statusUncertain.count,
+            waitingCount: waiting.count,
+            staleCount: snapshot.tasks.filter { $0.status == .stale }.count + derivedStale.count,
             recentCompletionCount: snapshot.recentCompletions.count,
             inboxPendingCount: pending,
             failedEventCount: failed,

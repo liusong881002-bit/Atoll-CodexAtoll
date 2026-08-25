@@ -88,9 +88,12 @@ public struct CodexEventReducer: Sendable {
       task.lastActivityAt = now
 
     case "PostToolUse":
-      if task.status == .waitingForApproval {
+      switch task.status {
+      case .waitingForApproval, .stale:
         task.status = .running
         task.approvalPreview = nil
+      default:
+        break
       }
       task.toolName = event.toolName ?? task.toolName
       task.lastActivityAt = now
@@ -151,6 +154,28 @@ public struct CodexEventReducer: Sendable {
     let staleChanged = markStaleTasks(state: &state, now: now, preferences: preferences)
     let completionsChanged = pruneCompletions(state: &state, now: now, preferences: preferences)
     guard staleChanged || completionsChanged else { return [] }
+    state.savedAt = now
+    return [.persist, .refreshPresentation]
+  }
+
+  public func markInterrupted(
+    state: inout CodexTaskStoreSnapshot,
+    sessionID: String,
+    now: Date,
+    preferences: AppPreferences
+  ) -> [CodexStateEffect] {
+    guard let index = state.tasks.firstIndex(where: { $0.sessionID == sessionID }) else {
+      return []
+    }
+    let task = state.tasks[index]
+    let liveness = CodexTaskLivenessPolicy(preferences: preferences).liveness(for: task, now: now)
+    guard task.status == .stale || (task.status == .running && liveness != .fresh) else {
+      return []
+    }
+
+    state.tasks[index].status = .failedOrInterrupted
+    state.tasks[index].endedAt = now
+    state.tasks[index].lastEventName = "ManualInterruption"
     state.savedAt = now
     return [.persist, .refreshPresentation]
   }
@@ -243,10 +268,11 @@ public struct CodexEventReducer: Sendable {
     preferences: AppPreferences
   ) -> Bool {
     var changed = false
+    let staleTimeout = CodexTaskLivenessPolicy(preferences: preferences).staleTimeout
     for index in state.tasks.indices {
       let task = state.tasks[index]
       guard task.status == .running || task.status == .waitingForApproval,
-        now.timeIntervalSince(task.lastActivityAt) >= preferences.staleTimeout
+        now.timeIntervalSince(task.lastActivityAt) >= staleTimeout
       else { continue }
       state.tasks[index].status = .stale
       changed = true
@@ -324,6 +350,19 @@ public struct CodexTaskStore: Sendable {
   @discardableResult
   public mutating func performMaintenance(now: Date = Date()) -> [CodexStateEffect] {
     reducer.performMaintenance(state: &snapshot, now: now, preferences: preferences)
+  }
+
+  @discardableResult
+  public mutating func markInterrupted(
+    sessionID: String,
+    now: Date = Date()
+  ) -> [CodexStateEffect] {
+    reducer.markInterrupted(
+      state: &snapshot,
+      sessionID: sessionID,
+      now: now,
+      preferences: preferences
+    )
   }
 
   @discardableResult

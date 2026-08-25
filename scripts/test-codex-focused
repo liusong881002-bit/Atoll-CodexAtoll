@@ -1,0 +1,42 @@
+#!/bin/zsh
+
+set -euo pipefail
+
+repo_root=${0:A:h:h}
+test_root=$(mktemp -d /private/tmp/atoll-codex-focused-tests.XXXXXX)
+
+cleanup() {
+  find "$test_root" -type f -delete
+  find "$test_root" -depth -type d -empty -delete
+}
+trap cleanup EXIT
+
+core_sources=(
+  "$repo_root/DynamicIsland/Features/Codex/Core/JSONValue.swift"
+  "$repo_root/DynamicIsland/Features/Codex/Core/CodexHookEvent.swift"
+  "$repo_root/DynamicIsland/Features/Codex/Core/CodexHookEnvelope.swift"
+  "$repo_root/DynamicIsland/Features/Codex/Core/PreviewSanitizer.swift"
+  "$repo_root/DynamicIsland/Features/Codex/Core/CodexTaskModels.swift"
+  "$repo_root/DynamicIsland/Features/Codex/Core/CodexEventReducer.swift"
+)
+
+swiftc \
+  "${core_sources[@]}" \
+  "$repo_root/DynamicIsland/Features/Codex/Presentation/CodexActivityTrayModel.swift" \
+  "$repo_root/tests/test_codex_status_reconciliation.swift" \
+  -o "$test_root/test_codex_status_reconciliation"
+"$test_root/test_codex_status_reconciliation"
+
+swiftc \
+  "${core_sources[@]}" \
+  "$repo_root/tests/test_codex_completion_acknowledgement.swift" \
+  -o "$test_root/test_codex_completion_acknowledgement"
+"$test_root/test_codex_completion_acknowledgement"
+
+swiftc \
+  "$repo_root/DynamicIsland/Features/Codex/Core/PreviewSanitizer.swift" \
+  "$repo_root/DynamicIsland/Features/Codex/Core/CodexTaskModels.swift" \
+  "$repo_root/DynamicIsland/Features/Codex/Presentation/CodexActivityTrayModel.swift" \
+  "$repo_root/tests/test_codex_activity_tray_completion_deduplication.swift" \
+  -o "$test_root/test_codex_activity_tray_completion_deduplication"
+"$test_root/test_codex_activity_tray_completion_deduplication"

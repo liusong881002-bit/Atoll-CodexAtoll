@@ -111,15 +111,22 @@ public struct CodexPresentationBuilder: Sendable {
   public func build(
     from snapshot: CodexTaskStoreSnapshot,
     context: CodexPresentationContext = .steady,
-    ignoredSessionIDs: Set<String> = []
+    ignoredSessionIDs: Set<String> = [],
+    now: Date = Date(),
+    livenessPolicy: CodexTaskLivenessPolicy = .init()
   ) -> CodexPresentation {
-    let active = snapshot.tasks.filter {
+    let visibleTasks = snapshot.tasks.filter {
       !ignoredSessionIDs.contains($0.sessionID)
-        && ($0.status == .running || $0.status == .waitingForApproval)
     }
-    let waiting = active.filter { $0.status == .waitingForApproval }
-    let running = active.filter { $0.status == .running }
-    let currentSessionIDs = Set(active.map(\.sessionID))
+    let waiting = visibleTasks.filter { $0.status == .waitingForApproval }
+    let running = visibleTasks.filter {
+      $0.status == .running && livenessPolicy.liveness(for: $0, now: now) == .fresh
+    }
+    let currentSessionIDs = Set(
+      visibleTasks
+        .filter { $0.status == .running || $0.status == .waitingForApproval || $0.status == .stale }
+        .map(\.sessionID)
+    )
     let recent = snapshot.latestRecentCompletions(
       excludingSessionIDs: currentSessionIDs
     )
@@ -220,7 +227,8 @@ public struct CodexPresentationBuilder: Sendable {
     let conversationItems = makeConversationItems(
       waiting: waiting,
       running: running,
-      recent: recent
+      recent: recent,
+      now: now
     )
     let sections = makeSections(from: conversationItems)
     var metadata = [
@@ -337,7 +345,8 @@ public struct CodexPresentationBuilder: Sendable {
   private func makeConversationItems(
     waiting: [CodexTaskRecord],
     running: [CodexTaskRecord],
-    recent: [CodexCompletionRecord]
+    recent: [CodexCompletionRecord],
+    now: Date
   ) -> [CodexConversationPresentationItem] {
     var items: [CodexConversationPresentationItem] = []
 
@@ -351,7 +360,7 @@ public struct CodexPresentationBuilder: Sendable {
           sectionID: "waiting-\(index)",
           sessionID: task.sessionID,
           title: title,
-          status: statusLine(task: task, status: "等待批准"),
+          status: statusLine(task: task, status: "等待批准", now: now),
           content: conversationContent(
             preferred: task.approvalPreview,
             title: title,
@@ -369,7 +378,7 @@ public struct CodexPresentationBuilder: Sendable {
           sectionID: "running-\(index)",
           sessionID: task.sessionID,
           title: title,
-          status: statusLine(task: task, status: "运行中"),
+          status: statusLine(task: task, status: "运行中", now: now),
           content: conversationContent(
             preferred: nil,
             title: title,
@@ -452,13 +461,21 @@ public struct CodexPresentationBuilder: Sendable {
       url.absoluteString
   }
 
-  private func statusLine(task: CodexTaskRecord, status: String) -> String {
-    let duration = task.startedAt.map { formatDuration(from: $0, to: task.lastActivityAt) }
+  private func statusLine(task: CodexTaskRecord, status: String, now: Date) -> String {
+    let duration = task.startedAt.map { formatDuration(from: $0, to: now) }
     return duration.map { "\(status) · \($0)" } ?? status
   }
 
   private func formatDuration(from start: Date, to end: Date) -> String {
     let total = max(0, Int(end.timeIntervalSince(start)))
+    if total >= 60 * 60 {
+      return String(
+        format: "%02d:%02d:%02d",
+        total / 3_600,
+        (total % 3_600) / 60,
+        total % 60
+      )
+    }
     return String(format: "%02d:%02d", total / 60, total % 60)
   }
 

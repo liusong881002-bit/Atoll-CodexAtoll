@@ -8,6 +8,24 @@ public enum CodexTaskStatus: String, Codable, Equatable, Sendable {
     case failedOrInterrupted
     case stale
     case ended
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "awaitingStatus":
+            self = .running
+        case "interrupted":
+            self = .failedOrInterrupted
+        default:
+            self = CodexTaskStatus(rawValue: rawValue) ?? .failedOrInterrupted
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public enum PreviewMode: String, Codable, Equatable, Sendable {
@@ -17,6 +35,7 @@ public enum PreviewMode: String, Codable, Equatable, Sendable {
 
 public struct AppPreferences: Codable, Equatable, Sendable {
     public var previewMode: PreviewMode
+    public var statusConfirmationTimeout: TimeInterval
     public var staleTimeout: TimeInterval
     public var recentRetention: TimeInterval
     public var maxRecentCompletions: Int
@@ -25,18 +44,56 @@ public struct AppPreferences: Codable, Equatable, Sendable {
 
     public init(
         previewMode: PreviewMode = .projectAndPreview,
-        staleTimeout: TimeInterval = 45 * 60,
+        statusConfirmationTimeout: TimeInterval = 5 * 60,
+        staleTimeout: TimeInterval = 30 * 60,
         recentRetention: TimeInterval = 7 * 24 * 60 * 60,
         maxRecentCompletions: Int = 100,
         completionSneakPeekEnabled: Bool = true,
         approvalReminderEnabled: Bool = true
     ) {
         self.previewMode = previewMode
+        self.statusConfirmationTimeout = statusConfirmationTimeout
         self.staleTimeout = staleTimeout
         self.recentRetention = recentRetention
         self.maxRecentCompletions = max(1, maxRecentCompletions)
         self.completionSneakPeekEnabled = completionSneakPeekEnabled
         self.approvalReminderEnabled = approvalReminderEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case previewMode
+        case statusConfirmationTimeout
+        case staleTimeout
+        case recentRetention
+        case maxRecentCompletions
+        case completionSneakPeekEnabled
+        case approvalReminderEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            previewMode: try container.decodeIfPresent(PreviewMode.self, forKey: .previewMode)
+                ?? .projectAndPreview,
+            statusConfirmationTimeout: try container.decodeIfPresent(
+                TimeInterval.self,
+                forKey: .statusConfirmationTimeout
+            ) ?? 5 * 60,
+            staleTimeout: try container.decodeIfPresent(TimeInterval.self, forKey: .staleTimeout)
+                ?? 30 * 60,
+            recentRetention: try container.decodeIfPresent(TimeInterval.self, forKey: .recentRetention)
+                ?? 7 * 24 * 60 * 60,
+            maxRecentCompletions: try container.decodeIfPresent(Int.self, forKey: .maxRecentCompletions)
+                ?? 100,
+            completionSneakPeekEnabled: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .completionSneakPeekEnabled
+            ) ?? true,
+            approvalReminderEnabled: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .approvalReminderEnabled
+            ) ?? true
+        )
     }
 }
 
@@ -94,6 +151,50 @@ public struct CodexTaskRecord: Codable, Equatable, Identifiable, Sendable {
         self.model = model
         self.lastEventID = lastEventID
         self.lastEventName = lastEventName
+    }
+}
+
+public enum CodexTaskLiveness: Equatable, Sendable {
+    case fresh
+    case statusUncertain
+    case stale
+}
+
+public struct CodexTaskLivenessPolicy: Equatable, Sendable {
+    public let statusConfirmationTimeout: TimeInterval
+    public let staleTimeout: TimeInterval
+
+    public init(
+        statusConfirmationTimeout: TimeInterval = 5 * 60,
+        staleTimeout: TimeInterval = 30 * 60
+    ) {
+        self.statusConfirmationTimeout = max(0, statusConfirmationTimeout)
+        self.staleTimeout = max(self.statusConfirmationTimeout, staleTimeout)
+    }
+
+    public init(preferences: AppPreferences) {
+        self.init(
+            statusConfirmationTimeout: preferences.statusConfirmationTimeout,
+            staleTimeout: preferences.staleTimeout
+        )
+    }
+
+    public func liveness(for task: CodexTaskRecord, now: Date) -> CodexTaskLiveness {
+        guard task.status == .running else { return .fresh }
+        let silenceDuration = max(0, now.timeIntervalSince(task.lastActivityAt))
+        if silenceDuration >= staleTimeout {
+            return .stale
+        }
+        if silenceDuration >= statusConfirmationTimeout {
+            return .statusUncertain
+        }
+        return .fresh
+    }
+}
+
+public extension CodexTaskRecord {
+    var wasManuallyInterrupted: Bool {
+        status == .failedOrInterrupted && lastEventName == "ManualInterruption"
     }
 }
 
