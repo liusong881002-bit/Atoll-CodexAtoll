@@ -146,6 +146,106 @@ struct CodexActivityTrayCompletionDeduplicationTests {
                 && explicitCloseSession.finish().isEmpty,
             "an explicit tray close acknowledges exposed sessions without relying on onDisappear and is idempotent"
         )
+
+        var registry = CodexActivityTrayPresentationRegistry()
+        let screenKey = "Built-in Retina Display"
+        let firstContentSignature = [latestTurn.id]
+        registry.updateVisibility(
+            screenKey: screenKey,
+            contentSignature: firstContentSignature,
+            visibleCompletionIDs: [latestTurn.id]
+        )
+        let firstRegistryPresentation = registry.beginPresentation(
+            screenKey: screenKey,
+            contentSignature: firstContentSignature
+        )
+        try expect(
+            firstRegistryPresentation.exposedCompletionIDs == [latestTurn.id],
+            "opening the tray replays the last matching visible layout"
+        )
+        try expect(
+            registry.finishPresentation(screenKey: screenKey) == [latestTurn.id],
+            "closing the first tray presentation returns the exact completion that was visible"
+        )
+
+        let repeatedRegistryPresentation = registry.beginPresentation(
+            screenKey: screenKey,
+            contentSignature: firstContentSignature
+        )
+        try expect(
+            repeatedRegistryPresentation.exposedCompletionIDs == [latestTurn.id],
+            "reopening an unchanged tray replays visibility without requiring another layout callback"
+        )
+
+        let additionalCompletionID = UUID()
+        let changedContentPresentation = registry.beginPresentation(
+            screenKey: screenKey,
+            contentSignature: [additionalCompletionID, latestTurn.id]
+        )
+        try expect(
+            changedContentPresentation.exposedCompletionIDs == [latestTurn.id],
+            "reopening after unread content changes still replays the previously visible completion"
+        )
+
+        let newerTurn = CodexCompletionRecord(
+            sessionID: latestTurn.sessionID,
+            projectName: latestTurn.projectName,
+            promptPreview: "第三轮问题",
+            resultPreview: "第三轮完成",
+            completedAt: now.addingTimeInterval(30)
+        )
+        registry.updateVisibility(
+            screenKey: screenKey,
+            contentSignature: [newerTurn.id],
+            visibleCompletionIDs: [newerTurn.id]
+        )
+        try expect(
+            registry.finishPresentation(screenKey: screenKey) == [latestTurn.id, newerTurn.id],
+            "an open tray accumulates only completion IDs that were actually visible"
+        )
+
+        registry.updateVisibility(
+            screenKey: screenKey,
+            contentSignature: [latestTurn.id],
+            visibleCompletionIDs: [latestTurn.id]
+        )
+        _ = registry.beginPresentation(
+            screenKey: screenKey,
+            contentSignature: [latestTurn.id]
+        )
+        registry.updateVisibility(
+            screenKey: screenKey,
+            contentSignature: [newerTurn.id],
+            visibleCompletionIDs: []
+        )
+        try expect(
+            registry.finishPresentation(screenKey: screenKey) == [latestTurn.id],
+            "a newer completion in the same session is not acknowledged unless it becomes visible"
+        )
+
+        registry.updateVisibility(
+            screenKey: screenKey,
+            contentSignature: firstContentSignature,
+            visibleCompletionIDs: [latestTurn.id]
+        )
+        registry.updateVisibility(
+            screenKey: "External Display",
+            contentSignature: [newerTurn.id],
+            visibleCompletionIDs: [newerTurn.id]
+        )
+        _ = registry.beginPresentation(
+            screenKey: screenKey,
+            contentSignature: firstContentSignature
+        )
+        _ = registry.beginPresentation(
+            screenKey: "External Display",
+            contentSignature: [newerTurn.id]
+        )
+        try expect(
+            registry.finishPresentation(screenKey: screenKey) == [latestTurn.id]
+                && registry.finishPresentation(screenKey: "External Display") == [newerTurn.id],
+            "activity tray presentations remain isolated per screen"
+        )
         print("CodexActivityTrayCompletionDeduplicationTests: PASS")
     }
 

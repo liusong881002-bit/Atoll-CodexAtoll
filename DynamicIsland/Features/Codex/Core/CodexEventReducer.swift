@@ -228,6 +228,17 @@ public struct CodexEventReducer: Sendable {
     return [.persist, .refreshPresentation]
   }
 
+  public func acknowledgeCompletions(
+    completionIDs: Set<UUID>,
+    state: inout CodexTaskStoreSnapshot,
+    now: Date
+  ) -> [CodexStateEffect] {
+    guard acknowledgeCompletionIDs(completionIDs, state: &state, now: now) else {
+      return []
+    }
+    return [.persist, .refreshPresentation]
+  }
+
   private func upsert(_ task: CodexTaskRecord, into tasks: inout [CodexTaskRecord]) {
     if let index = tasks.firstIndex(where: { $0.sessionID == task.sessionID }) {
       tasks[index] = task
@@ -245,18 +256,29 @@ public struct CodexEventReducer: Sendable {
     let completionIDs = state.recentCompletions
       .filter { $0.sessionID == sessionID }
       .map(\.id)
+    return acknowledgeCompletionIDs(Set(completionIDs), state: &state, now: now)
+  }
+
+  private func acknowledgeCompletionIDs(
+    _ completionIDs: Set<UUID>,
+    state: inout CodexTaskStoreSnapshot,
+    now: Date
+  ) -> Bool {
     guard !completionIDs.isEmpty else { return false }
+
+    let retainedCompletionIDs = Set(state.recentCompletions.map(\.id))
+    let eligibleCompletionIDs = completionIDs.intersection(retainedCompletionIDs)
+    guard !eligibleCompletionIDs.isEmpty else { return false }
 
     var acknowledged = state.acknowledgedCompletionIDs ?? []
     let existing = Set(acknowledged)
-    let newIDs = completionIDs.filter { !existing.contains($0) }
+    let newIDs = eligibleCompletionIDs.filter { !existing.contains($0) }
     guard !newIDs.isEmpty else { return false }
 
     acknowledged.append(contentsOf: newIDs)
     state.acknowledgedCompletionIDs = acknowledged
-    let acknowledgedSet = Set(completionIDs)
     state.presentedCompletionIDs = (state.presentedCompletionIDs ?? []).filter {
-      !acknowledgedSet.contains($0)
+      !eligibleCompletionIDs.contains($0)
     }
     state.savedAt = now
     return true
@@ -388,5 +410,17 @@ public struct CodexTaskStore: Sendable {
     now: Date = Date()
   ) -> [CodexStateEffect] {
     reducer.acknowledgeCompletion(sessionID: sessionID, state: &snapshot, now: now)
+  }
+
+  @discardableResult
+  public mutating func acknowledgeCompletions(
+    completionIDs: Set<UUID>,
+    now: Date = Date()
+  ) -> [CodexStateEffect] {
+    reducer.acknowledgeCompletions(
+      completionIDs: completionIDs,
+      state: &snapshot,
+      now: now
+    )
   }
 }

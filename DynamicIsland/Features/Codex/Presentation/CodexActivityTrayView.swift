@@ -19,7 +19,8 @@ struct CodexActivityTrayView: View {
     @State private var collapsedBuckets: Set<CodexActivityBucket> =
         CodexActivityTrayExpansionPolicy.defaultCollapsedBuckets()
     @State private var collapsedProjects: Set<String> = []
-    @State private var presentationVisibility = CodexActivityTrayPresentationVisibility()
+    @State private var itemFrames: [String: CGRect] = [:]
+    @State private var viewportSize: CGSize = .zero
 
     private let defaultHistoryLimit = 10
     private static let scrollCoordinateSpace = "codex-activity-tray-scroll"
@@ -60,23 +61,15 @@ struct CodexActivityTrayView: View {
                 .padding(.vertical, 14)
             }
             .coordinateSpace(name: Self.scrollCoordinateSpace)
-            .onPreferenceChange(CodexActivityItemFramePreferenceKey.self) { itemFrames in
-                presentationVisibility.updateLayout(
-                    itemFrames: itemFrames,
-                    viewportSize: viewportProxy.size
-                )
+            .onPreferenceChange(CodexActivityItemFramePreferenceKey.self) { frames in
+                itemFrames = frames
+                viewportSize = viewportProxy.size
                 recordVisibleCompletions()
             }
         }
         .onAppear {
-            presentationVisibility.beginPresentation(
-                id: controller.beginActivityTrayPresentation(screenID: vm.screen)
-            )
             resetPresentationState()
             recordVisibleCompletions()
-        }
-        .onDisappear {
-            finishActivityTrayPresentation()
         }
         .accessibilityIdentifier("codex-activity-tray")
     }
@@ -344,22 +337,17 @@ struct CodexActivityTrayView: View {
     }
 
     private func recordVisibleCompletions() {
-        guard let exposure = presentationVisibility.activeExposure else { return }
         let unreadItems = model.buckets
             .first { $0.bucket == .unreadCompleted }?
             .items ?? []
-        let visibleItems = unreadItems.filter { exposure.visibleItemIDs.contains($0.id) }
-        controller.recordVisibleActivityTrayCompletions(
-            visibleItems,
-            screenID: vm.screen,
-            presentationID: exposure.presentationID
+        let visibleItemIDs = CodexActivityTrayVisibilityPolicy.visibleItemIDs(
+            itemFrames: itemFrames,
+            viewportBounds: CGRect(origin: .zero, size: viewportSize)
         )
-    }
-
-    private func finishActivityTrayPresentation() {
-        controller.finishActivityTrayPresentation(
-            screenID: vm.screen,
-            presentationID: presentationVisibility.finishPresentation()
+        controller.updateActivityTrayVisibility(
+            visibleItems: unreadItems.filter { visibleItemIDs.contains($0.id) },
+            allUnreadItems: unreadItems,
+            screenID: vm.screen
         )
     }
 

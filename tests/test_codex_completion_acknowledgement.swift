@@ -147,6 +147,38 @@ struct CodexCompletionAcknowledgementTests {
             "repeated per-session acknowledgement is idempotent"
         )
 
+        let sameSessionOlder = CodexCompletionRecord(
+            sessionID: "same-session",
+            projectName: "Atoll-CodexAtoll",
+            promptPreview: "第一轮",
+            resultPreview: "第一轮完成",
+            completedAt: now.addingTimeInterval(3)
+        )
+        let sameSessionNewer = CodexCompletionRecord(
+            sessionID: sameSessionOlder.sessionID,
+            projectName: "Atoll-CodexAtoll",
+            promptPreview: "第二轮",
+            resultPreview: "第二轮完成",
+            completedAt: now.addingTimeInterval(4)
+        )
+        var exactCompletionSnapshot = CodexTaskStoreSnapshot(
+            savedAt: now,
+            recentCompletions: [sameSessionOlder, sameSessionNewer],
+            presentedCompletionIDs: [sameSessionOlder.id]
+        )
+        let exactCompletionEffects = reducer.acknowledgeCompletions(
+            completionIDs: [sameSessionOlder.id],
+            state: &exactCompletionSnapshot,
+            now: now
+        )
+        try expect(
+            exactCompletionEffects == [.persist, .refreshPresentation]
+                && exactCompletionSnapshot.acknowledgedCompletionIDs == [sameSessionOlder.id]
+                && exactCompletionSnapshot.presentedCompletionIDs?.isEmpty == true
+                && exactCompletionSnapshot.unacknowledgedCompletions == [sameSessionNewer],
+            "acknowledging exact completion IDs does not consume a newer turn in the same session"
+        )
+
         var resumedSnapshot = CodexTaskStoreSnapshot(
             savedAt: now,
             recentCompletions: [third]

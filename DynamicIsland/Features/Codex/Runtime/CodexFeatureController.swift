@@ -31,12 +31,7 @@ final class CodexFeatureController: ObservableObject {
     private var store: CodexTaskStore
     private var timer: Timer?
     private var cancellables = Set<AnyCancellable>()
-    private var activityTrayPresentations: [String: ActivityTrayPresentation] = [:]
-
-    private struct ActivityTrayPresentation {
-        let id: UUID
-        var readSession: CodexActivityTrayReadSession
-    }
+    private var activityTrayPresentations = CodexActivityTrayPresentationRegistry()
 
     private static let defaultActivityTrayScreenKey = "__default__"
 
@@ -197,34 +192,44 @@ final class CodexFeatureController: ObservableObject {
     @discardableResult
     func beginActivityTrayPresentation(screenID: String?) -> UUID {
         let key = activityTrayScreenKey(screenID)
-        if activityTrayPresentations[key] != nil {
-            finishActivityTrayPresentation(screenID: screenID)
-        }
-
-        let id = UUID()
-        activityTrayPresentations[key] = ActivityTrayPresentation(
-            id: id,
-            readSession: CodexActivityTrayReadSession()
+        let contentSignature = activityTrayUnreadCompletionIDs()
+        let result = activityTrayPresentations.beginPresentation(
+            screenKey: key,
+            contentSignature: contentSignature
         )
-        return id
+        CodexActivityTrayDiagnostics.log(
+            event: "presentation.begin",
+            screenKey: key,
+            presentationID: result.presentationID,
+            completionCount: result.exposedCompletionIDs.count
+        )
+        if !result.exposedCompletionIDs.isEmpty {
+            recordCompletionPresentations(completionIDs: result.exposedCompletionIDs)
+        }
+        return result.presentationID
     }
 
-    func recordVisibleActivityTrayCompletions(
-        _ visibleItems: [CodexActivityTrayItem],
-        screenID: String?,
-        presentationID: UUID
+    func updateActivityTrayVisibility(
+        visibleItems: [CodexActivityTrayItem],
+        allUnreadItems: [CodexActivityTrayItem],
+        screenID: String?
     ) {
         let key = activityTrayScreenKey(screenID)
-        guard var presentation = activityTrayPresentations[key],
-              presentation.id == presentationID else { return }
-
-        let decision = presentation.readSession.recordExposure(
-            for: visibleItems,
-            previouslyPresentedIDs: Set(snapshot.presentedCompletionIDs ?? [])
+        let contentSignature = allUnreadItems.compactMap(\.completionID)
+        let visibleCompletionIDs = Set(visibleItems.compactMap(\.completionID))
+        let newlyExposedCompletionIDs = activityTrayPresentations.updateVisibility(
+            screenKey: key,
+            contentSignature: contentSignature,
+            visibleCompletionIDs: visibleCompletionIDs
         )
-        activityTrayPresentations[key] = presentation
-        guard !decision.completionIDsToRecord.isEmpty else { return }
-        recordCompletionPresentations(completionIDs: decision.completionIDsToRecord)
+        CodexActivityTrayDiagnostics.log(
+            event: "visibility.updated",
+            screenKey: key,
+            completionCount: visibleCompletionIDs.count,
+            detail: "content=\(contentSignature.count) newly_exposed=\(newlyExposedCompletionIDs.count)"
+        )
+        guard !newlyExposedCompletionIDs.isEmpty else { return }
+        recordCompletionPresentations(completionIDs: newlyExposedCompletionIDs)
     }
 
     func finishActivityTrayPresentation(
@@ -232,21 +237,22 @@ final class CodexFeatureController: ObservableObject {
         presentationID: UUID? = nil
     ) {
         let key = activityTrayScreenKey(screenID)
-        guard var presentation = activityTrayPresentations[key],
-              presentationID == nil || presentation.id == presentationID else { return }
-        activityTrayPresentations.removeValue(forKey: key)
-
-        let sessionIDs = presentation.readSession.finish()
-        guard !sessionIDs.isEmpty else { return }
-        acknowledgeCompletions(sessionIDs: sessionIDs)
+        let completionIDs = activityTrayPresentations.finishPresentation(screenKey: key)
+        CodexActivityTrayDiagnostics.log(
+            event: "presentation.finish",
+            screenKey: key,
+            presentationID: presentationID,
+            completionCount: completionIDs.count
+        )
+        guard !completionIDs.isEmpty else { return }
+        acknowledgeCompletions(completionIDs: completionIDs)
     }
 
     func finishAllActivityTrayPresentations() {
-        let screenIDs = activityTrayPresentations.keys.map {
-            $0 == Self.defaultActivityTrayScreenKey ? nil : $0
-        }
-        for screenID in screenIDs {
-            finishActivityTrayPresentation(screenID: screenID)
+        for key in activityTrayPresentations.activeScreenKeys {
+            let completionIDs = activityTrayPresentations.finishPresentation(screenKey: key)
+            guard !completionIDs.isEmpty else { continue }
+            acknowledgeCompletions(completionIDs: completionIDs)
         }
     }
 
@@ -288,11 +294,47 @@ final class CodexFeatureController: ObservableObject {
         }
     }
 
+    func acknowledgeCompletions(completionIDs: Set<UUID>) {
+        guard Defaults[.enableCodexIntegration] else { return }
+        let effects = store.acknowledgeCompletions(completionIDs: completionIDs)
+        guard !effects.isEmpty else { return }
+
+        do {
+            try repository.save(store.snapshot)
+            snapshot = store.snapshot
+            presentationCoordinator.update(
+                snapshot: presentationSnapshot(),
+                ignoredSessionIDs: activityTrayPreferences.ignoredSessionIDs,
+                livenessPolicy: livenessPolicy,
+                interruptActivePulse: true
+            )
+            CodexActivityTrayDiagnostics.log(
+                event: "completion.acknowledged",
+                screenKey: "all",
+                completionCount: completionIDs.count
+            )
+            lastError = nil
+        } catch {
+            lastError = "更新 Codex 完成状态失败：\(error.localizedDescription)"
+        }
+    }
+
     private func activityTrayScreenKey(_ screenID: String?) -> String {
         guard let screenID, !screenID.isEmpty else {
             return Self.defaultActivityTrayScreenKey
         }
         return screenID
+    }
+
+    private func activityTrayUnreadCompletionIDs() -> [UUID] {
+        CodexActivityTrayBuilder().build(
+            from: snapshot,
+            preferences: activityTrayPreferences,
+            livenessPolicy: livenessPolicy
+        ).buckets
+            .first { $0.bucket == .unreadCompleted }?
+            .items
+            .compactMap(\.completionID) ?? []
     }
 
     func openCodexConversation(sessionID: String) {

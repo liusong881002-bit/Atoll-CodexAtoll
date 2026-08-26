@@ -700,6 +700,10 @@ struct ContentView: View {
                     )
                 }
                 syncStickyTerminalOutsideClickMonitor()
+                synchronizeCodexActivityTrayPresentation()
+            }
+            .onChange(of: coordinator.selectedExtensionExperienceID) { _, _ in
+                synchronizeCodexActivityTrayPresentation()
             }
             .sensoryFeedback(.alignment, trigger: haptics)
             .contextMenu {
@@ -765,6 +769,7 @@ struct ContentView: View {
                     CodexFeatureController.shared.finishActivityTrayPresentation(screenID: screenID)
                     performViewTeardown()
                 }
+                synchronizeCodexActivityTrayPresentation()
             }
             .onChange(of: terminalStickyMode) { _, _ in
                 syncStickyTerminalOutsideClickMonitor()
@@ -778,6 +783,7 @@ struct ContentView: View {
                     releaseMusicControlWindowUpdates(after: musicControlResumeDelay)
                     enqueueMusicControlWindowSync(forceRefresh: true, delay: 0.05)
                 }
+                synchronizeCodexActivityTrayPresentation()
             }
             .onChange(of: musicControlWindowEnabled) { _, enabled in
                 if enabled {
@@ -2310,6 +2316,22 @@ struct ContentView: View {
         extensionNotchExperienceManager.selectedTabPayload(
             experienceID: coordinator.selectedExtensionExperienceID
         )
+    }
+
+    private func synchronizeCodexActivityTrayPresentation() {
+        let isCodexActivityTrayPresented = vm.notchState == .open
+            && coordinator.currentView == .extensionExperience
+            && currentExtensionTabPayload().map {
+                CodexPresentationConstants.isBuiltInCodex(
+                    bundleIdentifier: $0.bundleIdentifier
+                )
+            } == true
+
+        if isCodexActivityTrayPresented {
+            CodexFeatureController.shared.beginActivityTrayPresentation(screenID: vm.screen)
+        } else {
+            CodexFeatureController.shared.finishActivityTrayPresentation(screenID: vm.screen)
+        }
     }
 
     private func extensionTabPreferredHeight(baseSize: CGSize) -> CGFloat? {

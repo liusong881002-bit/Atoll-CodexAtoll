@@ -323,6 +323,76 @@ struct CodexActivityTrayReadSession: Equatable, Sendable {
     }
 }
 
+struct CodexActivityTrayPresentationRegistry: Equatable, Sendable {
+    struct BeginResult: Equatable, Sendable {
+        let presentationID: UUID
+        let exposedCompletionIDs: Set<UUID>
+    }
+
+    private struct VisibilitySnapshot: Equatable, Sendable {
+        let contentSignature: [UUID]
+        let visibleCompletionIDs: Set<UUID>
+    }
+
+    private struct Presentation: Equatable, Sendable {
+        let id: UUID
+        var exposedCompletionIDs: Set<UUID>
+    }
+
+    private var visibilityByScreen: [String: VisibilitySnapshot] = [:]
+    private var presentationsByScreen: [String: Presentation] = [:]
+
+    @discardableResult
+    mutating func beginPresentation(
+        screenKey: String,
+        contentSignature: [UUID]
+    ) -> BeginResult {
+        var presentation = presentationsByScreen[screenKey]
+            ?? Presentation(id: UUID(), exposedCompletionIDs: [])
+
+        if let visibility = visibilityByScreen[screenKey] {
+            presentation.exposedCompletionIDs.formUnion(
+                visibility.visibleCompletionIDs.intersection(contentSignature)
+            )
+        }
+
+        presentationsByScreen[screenKey] = presentation
+        return BeginResult(
+            presentationID: presentation.id,
+            exposedCompletionIDs: presentation.exposedCompletionIDs
+        )
+    }
+
+    @discardableResult
+    mutating func updateVisibility(
+        screenKey: String,
+        contentSignature: [UUID],
+        visibleCompletionIDs: Set<UUID>
+    ) -> Set<UUID> {
+        let eligibleCompletionIDs = visibleCompletionIDs.intersection(contentSignature)
+        visibilityByScreen[screenKey] = VisibilitySnapshot(
+            contentSignature: contentSignature,
+            visibleCompletionIDs: eligibleCompletionIDs
+        )
+
+        guard var presentation = presentationsByScreen[screenKey] else { return [] }
+        let newlyExposedCompletionIDs = eligibleCompletionIDs.subtracting(
+            presentation.exposedCompletionIDs
+        )
+        presentation.exposedCompletionIDs.formUnion(eligibleCompletionIDs)
+        presentationsByScreen[screenKey] = presentation
+        return newlyExposedCompletionIDs
+    }
+
+    mutating func finishPresentation(screenKey: String) -> Set<UUID> {
+        presentationsByScreen.removeValue(forKey: screenKey)?.exposedCompletionIDs ?? []
+    }
+
+    var activeScreenKeys: [String] {
+        Array(presentationsByScreen.keys)
+    }
+}
+
 public struct CodexActivityTrayBuilder: Sendable {
     public init() {}
 

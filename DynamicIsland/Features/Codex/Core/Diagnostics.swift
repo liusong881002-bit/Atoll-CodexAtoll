@@ -1,4 +1,31 @@
 import Foundation
+import os.log
+
+enum CodexActivityTrayDiagnostics {
+    private static let activityLog = OSLog(
+        subsystem: "com.ebullioscopic.Atoll",
+        category: "codex.activity-tray"
+    )
+
+    static func log(
+        event: String,
+        screenKey: String,
+        presentationID: UUID? = nil,
+        completionCount: Int,
+        detail: String? = nil
+    ) {
+        let message = [
+            "event=\(event)",
+            "screen=\(screenKey)",
+            "presentation=\(presentationID?.uuidString ?? "none")",
+            "completion_count=\(completionCount)",
+            detail,
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        os_log("%{public}@", log: activityLog, type: .info, message)
+    }
+}
 
 public struct CodexDiagnosticsSnapshot: Codable, Equatable, Sendable {
     public let generatedAt: Date
