@@ -96,7 +96,11 @@ struct ContentView: View {
     
     // Dynamic sizing based on view type and graph count with smooth transitions
     var dynamicNotchSize: CGSize {
-        let baseSize = Defaults[.enableMinimalisticUI] ? minimalisticOpenNotchSize(isDynamicIslandMode: isDynamicIslandMode) : openNotchSize
+        var baseSize = Defaults[.enableMinimalisticUI] ? minimalisticOpenNotchSize(isDynamicIslandMode: isDynamicIslandMode) : openNotchSize
+
+        if coordinator.currentView == .home {
+            baseSize.height = standaloneCalendarResolvedOpenNotchHeight(baseHeight: baseSize.height)
+        }
         
         // When inline sneak peek is active in closed notch, use the wider inline width
         // so the outer maxWidth frame doesn't clip the expanded content
@@ -397,6 +401,60 @@ struct ContentView: View {
     /// Whether the global sneak peek is visible on this specific screen.
     private var isSneakPeekVisibleOnCurrentScreen: Bool {
         guard coordinator.sneakPeek.show else { return false }
+        return sneakPeekTargetsCurrentScreen
+    }
+
+    private var codexSneakPeekPassesRenderGates: Bool {
+        guard case let .extensionLiveActivity(bundleIdentifier, _) = coordinator.sneakPeek.type,
+              CodexPresentationConstants.isBuiltInCodex(
+                  bundleIdentifier: bundleIdentifier
+              ) else {
+            return false
+        }
+        return CodexPresentationVisibilityPolicy.canShow(
+            isBuiltInCodex: true,
+            codexEnabled: Defaults[.enableCodexIntegration],
+            thirdPartyEnabled: enableExtensionLiveActivities,
+            hideOnClosed: vm.hideOnClosed,
+            showCodexInFullscreen: Defaults[.codexShowInFullscreen]
+        ) && resolvedSneakPeekStyle() == .standard
+    }
+
+    private func codexSneakPeekSurfaceDecision(
+        matching payload: ExtensionLiveActivityPayload? = nil
+    ) -> CodexSneakPeekPresentationPolicy.SurfaceDecision {
+        let candidateMatches: Bool = {
+            guard let payload,
+                  CodexPresentationConstants.isBuiltInCodex(
+                      bundleIdentifier: payload.bundleIdentifier
+                  ),
+                  case let .extensionLiveActivity(bundleIdentifier, activityID) = coordinator.sneakPeek.type else {
+                return false
+            }
+            return payload.bundleIdentifier == bundleIdentifier
+                && payload.id == activityID
+        }()
+
+        return CodexSneakPeekPresentationPolicy.surfaceDecision(
+            isShowing: coordinator.sneakPeek.show,
+            isDismissing: coordinator.sneakPeek.isDismissing,
+            targetsCurrentScreen: sneakPeekTargetsCurrentScreen,
+            passesRenderGates: codexSneakPeekPassesRenderGates,
+            candidateMatches: candidateMatches
+        )
+    }
+
+    private var shouldMountSneakPeekOnCurrentScreen: Bool {
+        guard case let .extensionLiveActivity(bundleIdentifier, _) = coordinator.sneakPeek.type,
+              CodexPresentationConstants.isBuiltInCodex(
+                  bundleIdentifier: bundleIdentifier
+              ) else {
+            return isSneakPeekVisibleOnCurrentScreen
+        }
+        return codexSneakPeekSurfaceDecision().transientOccupiesSlot
+    }
+
+    private var sneakPeekTargetsCurrentScreen: Bool {
         guard Defaults[.showOnAllDisplays] else { return true }
         guard let targetScreenName = coordinator.sneakPeek.targetScreenName else { return true }
         return currentScreenName == targetScreenName
@@ -405,7 +463,7 @@ struct ContentView: View {
     /// Whether the notch/island should hide off-screen when closed on a non-notch display.
     /// Temporarily reveals the notch when a sneakPeek HUD (volume, brightness, music, etc.) is active.
     private var shouldHideUntilHover: Bool {
-        hideNonNotchUntilHover && isNonNotchScreen && vm.notchState == .closed && !isSneakPeekVisibleOnCurrentScreen
+        hideNonNotchUntilHover && isNonNotchScreen && vm.notchState == .closed && !shouldMountSneakPeekOnCurrentScreen
     }
 
     /// Whether the fallback top-edge hover detector should run.
@@ -1016,7 +1074,7 @@ struct ContentView: View {
                            Rectangle().fill(.clear).frame(width: vm.closedNotchSize.width - 20, height: vm.effectiveClosedNotchHeight)
                        }
                       
-                      if isSneakPeekVisibleOnCurrentScreen {
+                      if shouldMountSneakPeekOnCurrentScreen {
                           if (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && (coordinator.sneakPeek.type != .timer) && (coordinator.sneakPeek.type != .reminder) && (coordinator.sneakPeek.type != .capsLock) && !coordinator.sneakPeek.type.isExtensionPayload && !Defaults[.inlineHUD] && !isAirPodsListeningModeSneak && ((coordinator.sneakPeek.type != .volume && coordinator.sneakPeek.type != .brightness && coordinator.sneakPeek.type != .backlight) || vm.notchState == .closed) {
                               SystemEventIndicatorModifier(eventType: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, sendEventBack: { _ in
                                   //
@@ -1075,14 +1133,25 @@ struct ContentView: View {
                               let isBuiltInCodex = CodexPresentationConstants.isBuiltInCodex(
                                   bundleIdentifier: bundleID
                               )
-                              if (!vm.hideOnClosed || (isBuiltInCodex && Defaults[.codexShowInFullscreen]))
-                                  && activeSneakPeekStyle == .standard {
+                              let codexSurfaceDecision = codexSneakPeekSurfaceDecision()
+                              let shouldRenderExtensionSneakPeek = isBuiltInCodex
+                                  ? codexSurfaceDecision.rendersTransient
+                                  : (!vm.hideOnClosed && activeSneakPeekStyle == .standard)
+                              if shouldRenderExtensionSneakPeek {
                                   let payload = extensionLiveActivityManager.payload(bundleIdentifier: bundleID, activityID: activityID)
                                   let descriptor = payload?.descriptor
-                                  let presentationPhase = descriptor?.metadata["codex_presentation_phase"]
+                                  let presentationPhase = CodexSneakPeekPresentationPolicy.resolvedPhase(
+                                      snapshotMetadata: coordinator.sneakPeek.metadata,
+                                      liveMetadata: descriptor?.metadata
+                                  )
+                                  let presentationMetadata = coordinator.sneakPeek.metadata.isEmpty
+                                      ? descriptor?.metadata ?? [:]
+                                      : coordinator.sneakPeek.metadata
                                   let isCodexRunningPulse = isBuiltInCodex && presentationPhase == "running-pulse"
                                   let isCodexCompletionPulse = isBuiltInCodex && presentationPhase == "completion-pulse"
-                                  let accent = (descriptor?.accentColor.swiftUIColor ?? coordinator.sneakPeek.accentColor ?? .gray)
+                                  let accent = (isBuiltInCodex
+                                      ? coordinator.sneakPeek.accentColor ?? descriptor?.accentColor.swiftUIColor ?? .gray
+                                      : descriptor?.accentColor.swiftUIColor ?? coordinator.sneakPeek.accentColor ?? .gray)
                                       .ensureMinimumBrightness(factor: 0.7)
                                   GeometryReader { geo in
                                       if isBuiltInCodex {
@@ -1098,7 +1167,7 @@ struct ContentView: View {
                                               subtitle: coordinator.sneakPeek.subtitle,
                                               isCompletionPulse: presentationPhase == "completion-pulse",
                                               isRunningPulse: presentationPhase == "running-pulse",
-                                              isWaitingForApproval: (Int(descriptor?.metadata["codex_waiting_count"] ?? "0") ?? 0) > 0,
+                                              isWaitingForApproval: (Int(presentationMetadata["codex_waiting_count"] ?? "0") ?? 0) > 0,
                                               accent: transientAccent.ensureMinimumBrightness(factor: 0.7),
                                               availableWidth: max(0, geo.size.width)
                                           )
@@ -1123,6 +1192,9 @@ struct ContentView: View {
                                       }
                                   }
                                   .frame(
+                                      width: isBuiltInCodex
+                                          ? max(vm.closedNotchSize.width + 96, 320)
+                                          : nil,
                                       height: isCodexRunningPulse
                                           ? codexRunningSneakPeekContentHeight
                                           : (isCodexCompletionPulse ? codexCompletionSneakPeekContentHeight : nil)
@@ -1706,6 +1778,7 @@ struct ContentView: View {
     private func resolvedExtensionMusicPayload() -> ExtensionLiveActivityPayload? {
         let candidates = extensionLiveActivityManager.sortedActivities(for: true).filter {
             isExtensionActivitySourceEnabled($0)
+                && !shouldSuppressPersistentActivityForActiveSneakPeek($0)
         }
         guard let payload = candidates.first else {
             ExtensionRoutingDiagnostics.shared.logSuppression(
@@ -1799,7 +1872,10 @@ struct ContentView: View {
             return nil
         }
 
-        let candidates = baseCandidates.filter { $0.id != musicPayloadID }
+        let candidates = baseCandidates.filter { payload in
+            payload.id != musicPayloadID
+                && !shouldSuppressPersistentActivityForActiveSneakPeek(payload)
+        }
         guard let payload = candidates.first else {
             if let musicPayloadID {
                 ExtensionRoutingDiagnostics.shared.logSuppression(
@@ -1875,6 +1951,12 @@ struct ContentView: View {
 
         ExtensionRoutingDiagnostics.shared.logDisplay(.standalone, payload: payload)
         return payload
+    }
+
+    private func shouldSuppressPersistentActivityForActiveSneakPeek(
+        _ payload: ExtensionLiveActivityPayload
+    ) -> Bool {
+        codexSneakPeekSurfaceDecision(matching: payload).suppressesPersistent
     }
 
     private func isExtensionActivitySourceEnabled(_ payload: ExtensionLiveActivityPayload) -> Bool {
@@ -2766,7 +2848,7 @@ struct ContentView: View {
     #endif
     
     private func shouldFixSizeForSneakPeek() -> Bool {
-        guard isSneakPeekVisibleOnCurrentScreen else { return false }
+        guard shouldMountSneakPeekOnCurrentScreen else { return false }
         let style = resolvedSneakPeekStyle()
         
         // Check for extension sneak peek

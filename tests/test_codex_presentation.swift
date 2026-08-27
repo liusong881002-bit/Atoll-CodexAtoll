@@ -185,9 +185,11 @@ struct CodexPresentationTests {
             throw TestFailure(message: "running tasks expose a compact closed status")
         }
         try expect(
-            runningOnlyLiveActivity.sneakPeekConfig?.duration == 3.5
+            runningOnlyLiveActivity.sneakPeekConfig?.enabled == false
+                && runningOnlyLiveActivity.sneakPeekConfig?.showOnUpdate == false
+                && runningOnlyLiveActivity.sneakPeekConfig?.duration == 3.5
                 && runningOnlyLiveActivity.sneakPeekConfig?.style == .standard,
-            "new running activity keeps the standard 3.5 second presentation window"
+            "steady running status never triggers a second default sneak peek"
         )
         try expect(
             runningOnlyCompactStatus.lines.map(\.displayText) == ["2 · 进行中"],

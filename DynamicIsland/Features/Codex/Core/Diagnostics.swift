@@ -36,6 +36,24 @@ enum CodexActivityTrayDiagnostics {
     }
 }
 
+enum CodexSneakPeekDiagnostics {
+    private static let presentationLog = OSLog(
+        subsystem: "com.ebullioscopic.Atoll",
+        category: "codex.sneak-peek"
+    )
+
+    static func log(event: String, phase: String?, detail: String? = nil) {
+        let message = [
+            "event=\(event)",
+            "phase=\(phase ?? "none")",
+            detail,
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        os_log("%{public}@", log: presentationLog, type: .info, message)
+    }
+}
+
 public struct CodexDiagnosticsSnapshot: Codable, Equatable, Sendable {
     public let generatedAt: Date
     public let activeSessionCount: Int

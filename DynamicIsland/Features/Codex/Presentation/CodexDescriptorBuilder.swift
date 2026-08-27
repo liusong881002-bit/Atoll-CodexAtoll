@@ -280,7 +280,7 @@ public struct CodexPresentationBuilder: Sendable {
       metadata: liveMetadata,
       centerTextStyle: .inheritUser,
       sneakPeekConfig: AtollSneakPeekConfig(
-        enabled: true,
+        enabled: context != .steady,
         duration: context.sneakPeekDuration,
         style: .standard,
         showOnUpdate: triggersSneakPeekOnUpdate

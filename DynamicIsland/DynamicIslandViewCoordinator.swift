@@ -18,6 +18,7 @@
 
 import Combine
 import Defaults
+import Foundation
 import SwiftUI
 
 enum SneakContentType: Equatable {
@@ -82,9 +83,13 @@ struct sneakPeek {
     var icon: String = ""
     var title: String = ""
     var subtitle: String = ""
+    var metadata: [String: String] = [:]
     var accentColor: Color?
     var styleOverride: SneakPeekStyle? = nil
     var targetScreenName: String? = nil
+    var presentationID: UUID? = nil
+    var isDismissing: Bool = false
+    var autoHideDuration: TimeInterval = 1.5
 }
 
 enum BrowserType {
@@ -339,6 +344,8 @@ class DynamicIslandViewCoordinator: ObservableObject {
         && Defaults[.enableExtensionNotchTabs]
     }
     
+    @MainActor
+    @discardableResult
     func toggleSneakPeek(
         status: Bool,
         type: SneakContentType,
@@ -347,10 +354,11 @@ class DynamicIslandViewCoordinator: ObservableObject {
         icon: String = "",
         title: String = "",
         subtitle: String = "",
+        metadata: [String: String] = [:],
         accentColor: Color? = nil,
         styleOverride: SneakPeekStyle? = nil,
         onScreen targetScreen: NSScreen? = nil
-    ) {
+    ) -> UUID? {
         let resolvedDuration: TimeInterval
         switch type {
         case .timer:
@@ -362,7 +370,6 @@ class DynamicIslandViewCoordinator: ObservableObject {
         default:
             resolvedDuration = duration
         }
-        sneakPeekDuration = resolvedDuration
         let bypassedTypes: [SneakContentType] = [.music, .timer, .reminder, .bluetoothAudio]
         
         // Check if it's an extension type
@@ -374,30 +381,42 @@ class DynamicIslandViewCoordinator: ObservableObject {
         }
         
         if !isExtensionType && !bypassedTypes.contains(type) && !Defaults[.enableSystemHUD] {
-            return
+            return nil
         }
-        DispatchQueue.main.async {
-            // Single write so `sneakPeek.didSet` (which schedules the auto-hide)
-            // fires once, not once per field — the per-field writes raced the hide
-            // Task and could wedge `show == true` with no pending hide.
-            var updated = self.sneakPeek
-            updated.show = status
-            updated.type = type
-            updated.value = value
-            updated.icon = icon
-            updated.title = title
-            updated.subtitle = subtitle
-            updated.accentColor = accentColor
-            updated.styleOverride = styleOverride
-            updated.targetScreenName = targetScreen?.localizedName
-            withAnimation(.smooth(duration: 0.3)) {
-                self.sneakPeek = updated
-            }
+
+        if !status {
+            hideSneakPeek(ifMatching: type)
+            return nil
         }
+
+        let presentationID = UUID()
+        // Single write so `sneakPeek.didSet` (which schedules the auto-hide)
+        // fires once, not once per field. Keeping this update on MainActor also
+        // makes the returned presentation ID immediately cancellable.
+        sneakPeekDismissalTask?.cancel()
+        var updated = sneakPeek
+        updated.show = true
+        updated.type = type
+        updated.value = value
+        updated.icon = icon
+        updated.title = title
+        updated.subtitle = subtitle
+        updated.metadata = metadata
+        updated.accentColor = accentColor
+        updated.styleOverride = styleOverride
+        updated.targetScreenName = targetScreen?.localizedName
+        updated.presentationID = presentationID
+        updated.isDismissing = false
+        updated.autoHideDuration = resolvedDuration
+        withAnimation(.smooth(duration: 0.3)) {
+            sneakPeek = updated
+        }
+        return presentationID
     }
     
-    private var sneakPeekDuration: TimeInterval = 1.5
     private var sneakPeekTask: Task<Void, Never>?
+    private var sneakPeekDismissalTask: Task<Void, Never>?
+    private let sneakPeekDismissalDuration: TimeInterval = 0.3
 
     // Helper function to manage sneakPeek timer using Swift Concurrency
     private func scheduleSneakPeekHide(after duration: TimeInterval) {
@@ -406,23 +425,78 @@ class DynamicIslandViewCoordinator: ObservableObject {
         // Don't schedule auto-hide if duration is infinite (for persistent indicators like Caps Lock)
         guard duration.isFinite else { return }
 
+        guard let presentationID = sneakPeek.presentationID else { return }
+        let expectedType = sneakPeek.type
+
         sneakPeekTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(duration))
-            guard let self = self, !Task.isCancelled else { return }
-            await MainActor.run {
-                withAnimation {
-                    // Hide the sneak peek with the correct type that was showing
-                    self.toggleSneakPeek(status: false, type: self.sneakPeek.type)
-                    self.sneakPeekDuration = 1.5
-                }
-            }
+            guard !Task.isCancelled else { return }
+            self?.hideSneakPeek(
+                ifMatching: expectedType,
+                presentationID: presentationID
+            )
         }
+    }
+
+    @MainActor
+    @discardableResult
+    func requestHideSneakPeek(
+        ifMatching type: SneakContentType,
+        presentationID: UUID? = nil
+    ) -> SneakPeekDismissalResult {
+        hideSneakPeek(
+            ifMatching: type,
+            presentationID: presentationID
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    func hideSneakPeek(
+        ifMatching type: SneakContentType,
+        presentationID expectedPresentationID: UUID? = nil
+    ) -> SneakPeekDismissalResult {
+        guard sneakPeek.type == type else { return .differentContent }
+        let dismissalResult = SneakPeekPresentationTokenPolicy.dismissalResult(
+            isShowing: sneakPeek.show,
+            currentPresentationID: sneakPeek.presentationID,
+            expectedPresentationID: expectedPresentationID
+        )
+        guard dismissalResult == .dismissed else { return dismissalResult }
+
+        sneakPeekTask?.cancel()
+        sneakPeekDismissalTask?.cancel()
+        let dismissedPresentationID = sneakPeek.presentationID
+        var updated = sneakPeek
+        updated.show = false
+        updated.isDismissing = type.isExtensionPayload
+        withAnimation(.smooth(duration: sneakPeekDismissalDuration)) {
+            sneakPeek = updated
+        }
+
+        guard updated.isDismissing, let dismissedPresentationID else {
+            return .dismissed
+        }
+        let dismissalDuration = sneakPeekDismissalDuration
+        sneakPeekDismissalTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(dismissalDuration))
+            guard let self, !Task.isCancelled,
+                  self.sneakPeek.presentationID == dismissedPresentationID,
+                  !self.sneakPeek.show,
+                  self.sneakPeek.isDismissing else {
+                return
+            }
+            var settled = self.sneakPeek
+            settled.isDismissing = false
+            self.sneakPeek = settled
+        }
+        return .dismissed
     }
     
     @Published var sneakPeek: sneakPeek = .init() {
         didSet {
             if sneakPeek.show {
-                scheduleSneakPeekHide(after: sneakPeekDuration)
+                scheduleSneakPeekHide(after: sneakPeek.autoHideDuration)
             } else {
                 sneakPeekTask?.cancel()
             }

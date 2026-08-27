@@ -40,3 +40,23 @@ swiftc \
   "$repo_root/tests/test_codex_activity_tray_completion_deduplication.swift" \
   -o "$test_root/test_codex_activity_tray_completion_deduplication"
 "$test_root/test_codex_activity_tray_completion_deduplication"
+
+swiftc \
+  "$repo_root/DynamicIsland/Features/Codex/Presentation/CodexConstants.swift" \
+  "$repo_root/DynamicIsland/Features/Codex/Presentation/CodexSneakPeekPresentationPolicy.swift" \
+  "$repo_root/DynamicIsland/models/SneakPeekPresentationTokenPolicy.swift" \
+  "$repo_root/tests/test_codex_sneak_peek_presentation.swift" \
+  -o "$test_root/test_codex_sneak_peek_presentation"
+"$test_root/test_codex_sneak_peek_presentation"
+
+swiftc \
+  "$repo_root/DynamicIsland/sizing/NotchTabSizeSynchronizationPolicy.swift" \
+  "$repo_root/tests/test_notch_tab_size_synchronization.swift" \
+  -o "$test_root/test_notch_tab_size_synchronization"
+"$test_root/test_notch_tab_size_synchronization"
+
+swiftc \
+  "$repo_root/DynamicIsland/sizing/StandaloneCalendarLayoutPolicy.swift" \
+  "$repo_root/tests/test_standalone_calendar_layout.swift" \
+  -o "$test_root/test_standalone_calendar_layout"
+"$test_root/test_standalone_calendar_layout"

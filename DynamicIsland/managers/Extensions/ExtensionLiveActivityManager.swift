@@ -81,7 +81,11 @@ final class ExtensionLiveActivityManager: ObservableObject {
 
         let config = descriptor.sneakPeekConfig ?? .default
         if config.enabled && (!isUpdate || config.showOnUpdate) {
-            triggerSneakPeek(for: descriptor, bundleIdentifier: bundleIdentifier, config: config)
+            _ = triggerSneakPeek(
+                for: descriptor,
+                bundleIdentifier: bundleIdentifier,
+                config: config
+            )
         }
     }
 
@@ -92,6 +96,32 @@ final class ExtensionLiveActivityManager: ObservableObject {
                 $0.descriptor.id == activityID && $0.bundleIdentifier == bundleIdentifier
             }
         }
+        dismissBuiltInSneakPeek(
+            activityID: activityID,
+            bundleIdentifier: bundleIdentifier
+        )
+    }
+
+    @discardableResult
+    func dismissBuiltInSneakPeek(
+        activityID: String,
+        bundleIdentifier: String
+    ) -> SneakPeekDismissalResult {
+        guard CodexPresentationConstants.isBuiltInCodex(bundleIdentifier: bundleIdentifier) else {
+            return .differentContent
+        }
+        let coordinator = DynamicIslandViewCoordinator.shared
+        let type = SneakContentType.extensionLiveActivity(
+            bundleID: bundleIdentifier,
+            activityID: activityID
+        )
+        let result = coordinator.requestHideSneakPeek(ifMatching: type)
+        CodexSneakPeekDiagnostics.log(
+            event: "dismiss.requested",
+            phase: coordinator.sneakPeek.metadata["codex_presentation_phase"],
+            detail: "result=\(result.rawValue)"
+        )
+        return result
     }
 
     func present(descriptor: AtollLiveActivityDescriptor, bundleIdentifier: String) throws {
@@ -141,7 +171,11 @@ final class ExtensionLiveActivityManager: ObservableObject {
         if resolvedConfig.enabled {
             let shouldShow = !isUpdate || resolvedConfig.showOnUpdate
             if shouldShow {
-                triggerSneakPeek(for: descriptor, bundleIdentifier: bundleIdentifier, config: resolvedConfig)
+                _ = triggerSneakPeek(
+                    for: descriptor,
+                    bundleIdentifier: bundleIdentifier,
+                    config: resolvedConfig
+                )
             }
         }
     }
@@ -238,9 +272,18 @@ final class ExtensionLiveActivityManager: ObservableObject {
         logDiagnostics("Applied external live activity snapshot from PID \(sourcePID) (count: \(payloads.count))")
     }
 
-    private func triggerSneakPeek(for descriptor: AtollLiveActivityDescriptor, bundleIdentifier: String, config: AtollSneakPeekConfig) {
+    private func triggerSneakPeek(
+        for descriptor: AtollLiveActivityDescriptor,
+        bundleIdentifier: String,
+        config: AtollSneakPeekConfig
+    ) -> UUID? {
         let coordinator = DynamicIslandViewCoordinator.shared
-        let duration = config.duration ?? 2.5
+        let requestedDuration = config.duration ?? 2.5
+        let duration = CodexSneakPeekPresentationPolicy.hostAutoHideDuration(
+            requestedDuration: requestedDuration,
+            bundleIdentifier: bundleIdentifier,
+            metadata: descriptor.metadata
+        )
         let accentColor = descriptor.accentColor.swiftUIColor
         let styleOverride: SneakPeekStyle? = {
             guard let requestedStyle = config.style else { return nil }
@@ -257,7 +300,7 @@ final class ExtensionLiveActivityManager: ObservableObject {
         let resolvedSubtitle = descriptor.sneakPeekSubtitle ?? descriptor.subtitle ?? ""
         
         // Pass the activity's id and bundleID to the sneak peek so the specialized view can look up details if needed
-        coordinator.toggleSneakPeek(
+        let presentationID = coordinator.toggleSneakPeek(
             status: true,
             type: .extensionLiveActivity(bundleID: bundleIdentifier, activityID: descriptor.id),
             duration: duration,
@@ -265,11 +308,23 @@ final class ExtensionLiveActivityManager: ObservableObject {
             icon: "",
             title: resolvedTitle,
             subtitle: resolvedSubtitle,
+            metadata: descriptor.metadata,
             accentColor: accentColor,
             styleOverride: styleOverride
         )
         
-        logDiagnostics("Triggered sneak peek for \(descriptor.id) from \(bundleIdentifier) with duration \(duration)s")
+        logDiagnostics(
+            "Triggered sneak peek for \(descriptor.id) from \(bundleIdentifier) "
+                + "with requested duration \(requestedDuration)s and host duration \(duration)s"
+        )
+        if CodexPresentationConstants.isBuiltInCodex(bundleIdentifier: bundleIdentifier) {
+            CodexSneakPeekDiagnostics.log(
+                event: "presentation.triggered",
+                phase: descriptor.metadata["codex_presentation_phase"],
+                detail: "requested_duration=\(requestedDuration) host_duration=\(duration)"
+            )
+        }
+        return presentationID
     }
 
     private func logDiagnostics(_ message: String) {

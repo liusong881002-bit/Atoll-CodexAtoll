@@ -480,7 +480,6 @@ struct StandaloneCalendarView: View {
     @ObservedObject private var calendarManager = CalendarManager.shared
     @State private var selectedDate = Date()
     @State private var displayedMonth = Date()
-    @State private var datePickerScrollTarget: Date?
     @Default(.hideAllDayEvents) private var hideAllDayEvents
     @Default(.hideCompletedReminders) private var hideCompletedReminders
 
@@ -568,7 +567,6 @@ struct StandaloneCalendarView: View {
         .onAppear {
             selectedDate = Date.now
             displayedMonth = selectedDate.startOfMonth
-            requestDatePickerCenterOnCurrentDate()
             Task {
                 await calendarManager.updateCurrentDate(selectedDate)
             }
@@ -585,7 +583,6 @@ struct StandaloneCalendarView: View {
             guard newState == .open else { return }
             selectedDate = Date.now
             displayedMonth = selectedDate.startOfMonth
-            requestDatePickerCenterOnCurrentDate()
             Task {
                 await calendarManager.updateCurrentDate(selectedDate)
             }
@@ -593,89 +590,59 @@ struct StandaloneCalendarView: View {
     }
 
     private var leftPickerPane: some View {
-        GeometryReader { geometry in
-            let pickerViewportHeight = max(96, geometry.size.height - 56)
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .center) {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(monthTitle)
-                            .font(.title3)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.white)
-                        Text(yearTitle)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundStyle(Color(white: 0.65))
-                    }
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Button(action: showPreviousMonth) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 11, weight: .bold))
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.plain)
-
-                        Button(action: showNextMonth) {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .bold))
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(monthTitle)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                    Text(yearTitle)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Color(white: 0.65))
                 }
-
-                ScrollViewReader { proxy in
-                    VStack(spacing: 6) {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
-                            ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
-                                Text(symbol.prefix(1))
-                                    .font(.caption2)
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(Color(white: 0.55))
-                                    .frame(maxWidth: .infinity)
-                            }
-                        }
-
-                        ZStack {
-                            ScrollView(.vertical, showsIndicators: false) {
-                                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
-                                    ForEach(monthDays, id: \.self) { day in
-                                        dayCell(for: day)
-                                            .id(calendar.startOfDay(for: day))
-                                    }
-                                }
-                                .padding(.bottom, 2)
-                            }
-                            .onChange(of: datePickerScrollTarget) { _, target in
-                                guard let target else { return }
-                                centerDatePicker(on: target, proxy: proxy)
-                            }
-
-                            LinearGradient(colors: [Color.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
-                                .frame(height: 16)
-                                .allowsHitTesting(false)
-                                .frame(maxHeight: .infinity, alignment: .top)
-
-                            LinearGradient(colors: [.clear, Color.black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
-                                .frame(height: 16)
-                                .allowsHitTesting(false)
-                                .frame(maxHeight: .infinity, alignment: .bottom)
-                        }
-                        .frame(height: max(0, pickerViewportHeight - 22))
-                        .clipped()
+                Spacer()
+                HStack(spacing: 6) {
+                    Button(action: showPreviousMonth) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .bold))
+                            .frame(width: 24, height: 24)
                     }
-                    .frame(height: pickerViewportHeight)
+                    .buttonStyle(.plain)
+
+                    Button(action: showNextMonth) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .frame(height: pickerViewportHeight)
-                .clipped()
+                .foregroundStyle(.white)
             }
-            .frame(maxHeight: .infinity, alignment: .top)
+
+            VStack(spacing: 6) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
+                    ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                        Text(symbol.prefix(1))
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color(white: 0.55))
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 14), spacing: 6), count: 7), spacing: 6) {
+                    ForEach(monthDays, id: \.self) { day in
+                        dayCell(for: day)
+                    }
+                }
+                .padding(.bottom, 2)
+            }
         }
         .padding(.horizontal, 6)
         .padding(.top, 4)
+        .frame(maxHeight: .infinity, alignment: .top)
         .clipped()
     }
 
@@ -752,21 +719,6 @@ struct StandaloneCalendarView: View {
         }
     }
 
-    private func requestDatePickerCenterOnCurrentDate() {
-        datePickerScrollTarget = calendar.startOfDay(for: selectedDate)
-    }
-
-    private func centerDatePicker(on target: Date, proxy: ScrollViewProxy) {
-        let normalizedTarget = calendar.startOfDay(for: target)
-        DispatchQueue.main.async {
-            withAnimation(.smooth(duration: 0.24)) {
-                proxy.scrollTo(normalizedTarget, anchor: .center)
-            }
-            if datePickerScrollTarget == normalizedTarget {
-                datePickerScrollTarget = nil
-            }
-        }
-    }
 }
 
 struct EmptyEventsView: View {

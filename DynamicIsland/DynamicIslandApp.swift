@@ -429,8 +429,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateWindowSizeForTabSwitch() {
+        synchronizeViewModelSizesForTabSwitch()
         let requiredSize = calculateRequiredNotchSize()
         resizeWindows(to: requiredSize, animated: false, force: true)
+    }
+
+    private func synchronizeViewModelSizesForTabSwitch() {
+        if Defaults[.showOnAllDisplays] {
+            for viewModel in viewModels.values {
+                viewModel.synchronizeNotchSizeForCurrentView()
+            }
+        } else {
+            vm.synchronizeNotchSizeForCurrentView()
+        }
+    }
+
+    private func updateHomeLayoutSizeIfNeeded() {
+        guard coordinator.currentView == .home else { return }
+        let hasOpenNotch = Defaults[.showOnAllDisplays]
+            ? viewModels.values.contains(where: { $0.notchState == .open })
+            : vm.notchState == .open
+        guard hasOpenNotch else { return }
+
+        synchronizeViewModelSizesForTabSwitch()
+        let requiredSize = calculateRequiredNotchSize()
+        resizeWindows(to: requiredSize, animated: true, force: false)
     }
     
     private func calculateRequiredNotchSize() -> CGSize {
@@ -496,6 +519,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Use minimalistic or normal size based on settings
         var baseSize = Defaults[.enableMinimalisticUI] ? minimalisticOpenNotchSize(isDynamicIslandMode: shouldUseDynamicIslandMode(for: vm.screen)) : openNotchSize
+
+        if coordinator.currentView == .home {
+            baseSize.height = standaloneCalendarResolvedOpenNotchHeight(baseHeight: baseSize.height)
+        }
         
         // Use a consistent height for different view types
         if coordinator.currentView == .timer {
@@ -688,6 +715,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateWindowSizeForTabSwitch()
             }
         }.store(in: &cancellables)
+
+        Defaults.publisher(.showCalendar, options: []).sink { [weak self] _ in
+            self?.updateHomeLayoutSizeIfNeeded()
+        }.store(in: &cancellables)
+
+        Defaults.publisher(.showStandardMediaControls, options: []).sink { [weak self] _ in
+            self?.updateHomeLayoutSizeIfNeeded()
+        }.store(in: &cancellables)
+
+        Defaults.publisher(.autoHideInactiveNotchMediaPlayer, options: []).sink { [weak self] _ in
+            self?.updateHomeLayoutSizeIfNeeded()
+        }.store(in: &cancellables)
+
+        MusicManager.shared.$isPlaying
+            .combineLatest(MusicManager.shared.$songTitle, MusicManager.shared.$artistName)
+            .map { _, _, _ in MusicManager.shared.hasActiveSession }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateHomeLayoutSizeIfNeeded()
+            }
+            .store(in: &cancellables)
 
         coordinator.$notesLayoutState
             .removeDuplicates()

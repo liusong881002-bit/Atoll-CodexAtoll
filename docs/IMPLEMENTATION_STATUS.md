@@ -23,6 +23,7 @@
 - 同一 Codex 对话的多轮完成在活动托盘中合并为一张最新卡片；绿色完成卡片第一次进入抽屉当前可视区域时记录展示并保持高亮，抽屉关闭后以该卡片的可见完成记录为截止点，将同一会话此前被合并的未读完成一并记为已读，抽屉打开后新到达的完成仍保持未读；未滚动到可视区域的完成项继续保留未读提示。
 - 活动托盘的可见性使用当前 SwiftUI 几何回调直接计算，并携带唯一 presentation ID 归入当前展示周期；抽屉关闭后才到达的迟到回调，以及下一次展开后才到达的上一周期回调都会被拒绝，不再污染后续展示。
 - 活动托盘通过 macOS Unified Logging 记录匿名屏幕 token、presentation 生命周期、可见曝光、展示状态持久化和完成确认结果；日志仅包含 UUID、计数、固定原因和错误 domain/code，不记录会话 ID、项目名、提示词或结果内容。
+- Codex 完成/进行中 Sneak Peek 由宿主 Coordinator 作为唯一展示 token 所有者；正常结束仍由 Presentation Coordinator 主动触发，同时保留比业务动画稍晚 1 秒的有限宿主兜底，避免任一关闭回调缺失后提示永久残留。退出阶段只保留布局收束，不再继续绘制旧完成内容；触发与关闭结果写入独立的 `codex.sneak-peek` 脱敏日志。
 - Codex 展开任务页高度提升至 420pt，最多直接展示 6 个独立对话区块；每个区块分别展示项目名、状态和相关内容，并可通过 Codex 会话深链跳转。
 - 每个独立对话区块整体为单一点击目标；鼠标悬停时背景和描边增强并切换手型光标，点击区块任意位置都会打开对应 Codex 会话。
 - 对话区块标题优先使用清理后的首条用户提示，附件包装会在截断前移除，标题限制为 24 个字符；Hooks 未提供标题或旧数据已截断时回退项目名。
@@ -52,6 +53,7 @@
 - 2026-08-23 Codex 临时提示动效已通过 `CodexPresentationTests`，覆盖新对话 6 秒、完成庆祝 3.5 秒及标准展示模式；`CodexHookHelper` Debug target 与 Atoll Debug 主 App 均构建成功，运行进程路径和 Debug Bundle ID 已复验。
 - 2026-08-23 修复完成庆祝被后台 0.5 秒常规刷新提前覆盖的问题：Presentation Coordinator 在 3.5 秒完成脉冲期间只更新最新快照，普通刷新不得恢复稳定态；新完成事件接管并重新开始完整窗口，旧恢复任务不会覆盖新庆祝。聚焦状态门测试已通过。
 - 2026-08-23 修复新对话在已有 Codex Live Activity 时不触发提醒的问题：Reducer 为 `UserPromptSubmit` 发出独立进行中事件，Presentation Coordinator 将其转换为 `running-pulse` 更新并保持完整 6 秒；即使当前仍有未读完成记录，提醒内容和蓝色动效也取自刚开始的新对话，不再被历史完成状态拦截。
+- 2026-08-27 修复“展开已读并关闭后，已读状态已落盘但旧已完成提示仍可能残留”的展示层回归：`CodexSneakPeekPresentationPolicyTests` 先以无限宿主时限得到 RED，随后覆盖有限兜底、退出阶段停止绘制以及单一 token 所有权并通过；Codex 聚焦测试 5/5、`git diff --check` 和固定 `DerivedData/Dev` Debug 构建均通过。
 - 自维护版本默认不启动 Sparkle，也不再指向官方 Atoll appcast；配置自有 `AtollUpdateFeedURL` 或 `ATOLL_UPDATE_FEED_URL` 后才启用更新。
 - 官方 Git remote 已从 `origin` 改名为 `upstream`；待提供自有仓库 URL 后再添加新的 `origin`。
 
@@ -66,6 +68,7 @@
 - 本次新对话入场和完成庆祝动效已完成代码、聚焦时序测试和 Debug 运行链路验证；Computer Use 的屏幕采集没有捕获 Atoll 顶层刘海窗口，因此两段动画的最终节奏和观感仍需在不录屏时由用户目视确认。
 - 本次活动托盘已完成聚焦测试和 Debug 构建；真实展开后点击“查看更多”、历史列表滚动以及已读徽标与历史记录分离的最终视觉验收仍需在停止录屏后补做。
 - 2026-08-27 已在隔离数据目录的固定路径 `Atoll Dev` 中完成真实冷启动验收：新完成记录初始保持未读，第一次展开时可见曝光进入当前 presentation，第一次关闭立即持久化已读并清除未读计数，不再依赖第二次展开；验收后隔离数据已清理。
+- 2026-08-27 本次提示残留修复已运行于 `DerivedData/Dev/Build/Products/Debug/Atoll.app`，PID、路径和 Bundle ID `com.Ebullioscopic.Atoll.dev` 已复验且只有一个 Atoll 实例；ScreenCaptureKit 返回 `-3811`，因此仍需在下一个真实完成任务出现后人工确认“展开已读—关闭—顶部已完成提示消失”的最终画面。
 - `/Applications/Atoll.app` 尚未替换为本次高度构建；点击已触发 Codex 深链，但 Computer Use 不允许读取 Codex App，目标任务定位仍需人工确认。
 - 空闲 Codex 子标签已通过真实安装包的 Accessibility 树确认；自动化点击后的缺省态最终视觉截图仍受快捷键展开 3 秒自动关闭影响，可由用户直接展开点击完成目视确认。
 - 验证 DMG 的正式 Release 签名和分发流程。当前无签名命令行构建不能替代完整 Xcode Archive/签名验收。

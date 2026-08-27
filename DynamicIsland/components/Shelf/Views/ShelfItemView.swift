@@ -339,19 +339,19 @@ private struct DraggableClickHandler<Content: View>: NSViewRepresentable {
             let pasteboardItem = NSPasteboardItem()
 
             switch item.kind {
-            case .file:
-                // Resolve bookmark on background thread with timeout for drag initiation
-                let semaphore = DispatchSemaphore(value: 0)
-                var resolvedURL: URL?
-                Task.detached { [item] in
-                    resolvedURL = await ShelfStateViewModel.shared.resolveAndUpdateBookmarkAsync(for: item)
-                    semaphore.signal()
-                }
-                _ = semaphore.wait(timeout: .now() + 5.0)
-                
-                guard let url = resolvedURL else {
+            case .file(let bookmarkData):
+                // AppKit requires the pasteboard payload before the drag session begins.
+                // Resolve the stored bookmark synchronously here instead of blocking the
+                // main thread while an async main-actor method tries to resume on it.
+                let resolution = Bookmark(data: bookmarkData).resolve()
+
+                guard let url = resolution.url else {
                     pasteboardItem.setString(item.displayName, forType: .string)
                     return pasteboardItem
+                }
+
+                if let refreshedData = resolution.refreshedData, refreshedData != bookmarkData {
+                    ShelfStateViewModel.shared.updateBookmark(for: item, bookmark: refreshedData)
                 }
                 
                 // Start accessing security-scoped resource and keep it active during drag

@@ -366,9 +366,26 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
         let baseSize = Defaults[.enableMinimalisticUI] ? minimalisticOpenNotchSize(isDynamicIslandMode: shouldUseDynamicIslandMode(for: screen)) : openNotchSize
         var adjustedSize = baseSize
 
+        if coordinator.currentView == .home {
+            adjustedSize.height = standaloneCalendarResolvedOpenNotchHeight(baseHeight: adjustedSize.height)
+            return adjustedSize
+        }
+
+        if coordinator.currentView == .timer {
+            adjustedSize.height = 250
+            return adjustedSize
+        }
+
         if coordinator.currentView == .notes || coordinator.currentView == .clipboard {
             let preferred = coordinator.notesLayoutState.preferredHeight
             adjustedSize.height = max(adjustedSize.height, preferred)
+            return adjustedSize
+        }
+
+        if coordinator.currentView == .terminal {
+            let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
+            let maxFraction = Defaults[.terminalMaxHeightFraction]
+            adjustedSize.height = min(screenHeight * maxFraction, max(300, screenHeight * maxFraction))
             return adjustedSize
         }
 
@@ -387,6 +404,17 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
             isStatsTabActive: coordinator.currentView == .stats,
             secondRowProgress: coordinator.statsSecondRowExpansion
         )
+    }
+
+    func synchronizeNotchSizeForCurrentView() {
+        let resolvedSize = calculateDynamicNotchSize()
+        let synchronizedSize = NotchTabSizeSynchronizationPolicy.contentSizeAfterTabSwitch(
+            isOpen: notchState == .open,
+            currentSize: notchSize,
+            resolvedSize: resolvedSize
+        )
+        guard synchronizedSize != notchSize else { return }
+        notchSize = synchronizedSize
     }
 
     func close() {

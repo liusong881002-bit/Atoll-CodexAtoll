@@ -35,6 +35,17 @@ var openNotchSize: CGSize {
     return .init(width: width, height: 200)
 }
 
+func standaloneCalendarResolvedOpenNotchHeight(baseHeight: CGFloat) -> CGFloat {
+    StandaloneCalendarLayoutPolicy.resolvedOpenNotchHeight(
+        baseHeight: baseHeight,
+        showCalendar: Defaults[.showCalendar],
+        enableMinimalisticUI: Defaults[.enableMinimalisticUI],
+        showStandardMediaControls: Defaults[.showStandardMediaControls],
+        autoHideInactiveMediaPlayer: Defaults[.autoHideInactiveNotchMediaPlayer],
+        hasActiveMusicSession: MusicManager.shared.hasActiveSession
+    )
+}
+
 /// Maximum notch width based on the current screen's point width.
 /// Prevents the notch from extending beyond the screen on scaled displays.
 func maxAllowedNotchWidth(for screenName: String? = nil) -> CGFloat {

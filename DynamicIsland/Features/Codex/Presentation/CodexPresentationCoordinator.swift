@@ -37,6 +37,10 @@ final class CodexPresentationCoordinator {
             restoreTask?.cancel()
             restoreTask = nil
             pulseGate.cancel()
+            liveActivityManager.dismissBuiltInSneakPeek(
+                activityID: CodexPresentationConstants.liveActivityID,
+                bundleIdentifier: builder.bundleIdentifier
+            )
         }
         if let sessionID = completionSessionIDs.last {
             let generation = pulseGate.begin()
@@ -136,6 +140,10 @@ final class CodexPresentationCoordinator {
             guard let self, self.pulseGate.finish(generation: generation) else { return }
             self.restoreTask = nil
             self.apply(snapshot: self.latestSnapshot, context: .steady)
+            self.liveActivityManager.dismissBuiltInSneakPeek(
+                activityID: CodexPresentationConstants.liveActivityID,
+                bundleIdentifier: self.builder.bundleIdentifier
+            )
         }
     }
 }
