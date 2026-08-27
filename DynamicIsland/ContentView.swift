@@ -2327,11 +2327,11 @@ struct ContentView: View {
                 )
             } == true
 
-        if isCodexActivityTrayPresented {
-            CodexFeatureController.shared.beginActivityTrayPresentation(screenID: vm.screen)
-        } else {
-            CodexFeatureController.shared.finishActivityTrayPresentation(screenID: vm.screen)
-        }
+        // The tray view owns presentation begin so every geometry callback is
+        // tagged with that exact view generation. The host remains responsible
+        // for deterministic teardown when the notch or selected tab closes.
+        guard !isCodexActivityTrayPresented else { return }
+        CodexFeatureController.shared.finishActivityTrayPresentation(screenID: vm.screen)
     }
 
     private func extensionTabPreferredHeight(baseSize: CGSize) -> CGFloat? {

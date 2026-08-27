@@ -233,7 +233,11 @@ public struct CodexEventReducer: Sendable {
     state: inout CodexTaskStoreSnapshot,
     now: Date
   ) -> [CodexStateEffect] {
-    guard acknowledgeCompletionIDs(completionIDs, state: &state, now: now) else {
+    let completionIDsToAcknowledge = completionIDsThroughVisibleCheckpoints(
+      completionIDs,
+      in: state.recentCompletions
+    )
+    guard acknowledgeCompletionIDs(completionIDsToAcknowledge, state: &state, now: now) else {
       return []
     }
     return [.persist, .refreshPresentation]
@@ -257,6 +261,32 @@ public struct CodexEventReducer: Sendable {
       .filter { $0.sessionID == sessionID }
       .map(\.id)
     return acknowledgeCompletionIDs(Set(completionIDs), state: &state, now: now)
+  }
+
+  private func completionIDsThroughVisibleCheckpoints(
+    _ visibleCompletionIDs: Set<UUID>,
+    in recentCompletions: [CodexCompletionRecord]
+  ) -> Set<UUID> {
+    guard !visibleCompletionIDs.isEmpty else { return [] }
+
+    // The activity tray renders one latest completion card per session. Treat
+    // each visible completion as a read-through checkpoint so older unread
+    // turns represented by that card are cleared, while a newer completion
+    // arriving after exposure remains unread.
+    var cutoffBySession: [String: Date] = [:]
+    for completion in recentCompletions where visibleCompletionIDs.contains(completion.id) {
+      let existingCutoff = cutoffBySession[completion.sessionID] ?? .distantPast
+      cutoffBySession[completion.sessionID] = max(existingCutoff, completion.completedAt)
+    }
+
+    return Set(
+      recentCompletions.compactMap { completion in
+        guard let cutoff = cutoffBySession[completion.sessionID],
+          completion.completedAt <= cutoff
+        else { return nil }
+        return completion.id
+      }
+    )
   }
 
   private func acknowledgeCompletionIDs(

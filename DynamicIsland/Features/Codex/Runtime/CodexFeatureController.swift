@@ -190,46 +190,71 @@ final class CodexFeatureController: ObservableObject {
     }
 
     @discardableResult
-    func beginActivityTrayPresentation(screenID: String?) -> UUID {
+    func beginActivityTrayPresentation(
+        screenID: String?,
+        presentationID: UUID
+    ) -> Bool {
         let key = activityTrayScreenKey(screenID)
-        let contentSignature = activityTrayUnreadCompletionIDs()
-        let result = activityTrayPresentations.beginPresentation(
+        guard let result = activityTrayPresentations.beginPresentation(
             screenKey: key,
-            contentSignature: contentSignature
-        )
+            presentationID: presentationID
+        ) else {
+            CodexActivityTrayDiagnostics.log(
+                event: "presentation.begin.ignored",
+                screenKey: key,
+                presentationID: presentationID,
+                completionCount: 0,
+                detail: "reason=stale_presentation"
+            )
+            return false
+        }
         CodexActivityTrayDiagnostics.log(
             event: "presentation.begin",
             screenKey: key,
             presentationID: result.presentationID,
             completionCount: result.exposedCompletionIDs.count
         )
-        if !result.exposedCompletionIDs.isEmpty {
-            recordCompletionPresentations(completionIDs: result.exposedCompletionIDs)
-        }
-        return result.presentationID
+        return true
     }
 
     func updateActivityTrayVisibility(
         visibleItems: [CodexActivityTrayItem],
         allUnreadItems: [CodexActivityTrayItem],
-        screenID: String?
+        screenID: String?,
+        presentationID: UUID
     ) {
         let key = activityTrayScreenKey(screenID)
         let contentSignature = allUnreadItems.compactMap(\.completionID)
         let visibleCompletionIDs = Set(visibleItems.compactMap(\.completionID))
-        let newlyExposedCompletionIDs = activityTrayPresentations.updateVisibility(
+        let activePresentationID = activityTrayPresentations.presentationID(screenKey: key)
+        guard let newlyExposedCompletionIDs = activityTrayPresentations.updateVisibility(
             screenKey: key,
+            presentationID: presentationID,
             contentSignature: contentSignature,
             visibleCompletionIDs: visibleCompletionIDs
-        )
+        ) else {
+            CodexActivityTrayDiagnostics.log(
+                event: "visibility.ignored",
+                screenKey: key,
+                presentationID: presentationID,
+                completionCount: visibleCompletionIDs.count,
+                detail: "reason=\(activePresentationID == nil ? "missing_presentation" : "stale_presentation") content=\(contentSignature.count)"
+            )
+            return
+        }
         CodexActivityTrayDiagnostics.log(
             event: "visibility.updated",
             screenKey: key,
+            presentationID: presentationID,
             completionCount: visibleCompletionIDs.count,
             detail: "content=\(contentSignature.count) newly_exposed=\(newlyExposedCompletionIDs.count)"
         )
         guard !newlyExposedCompletionIDs.isEmpty else { return }
-        recordCompletionPresentations(completionIDs: newlyExposedCompletionIDs)
+        recordCompletionPresentations(
+            completionIDs: newlyExposedCompletionIDs,
+            screenKey: key,
+            presentationID: presentationID
+        )
     }
 
     func finishActivityTrayPresentation(
@@ -237,35 +262,112 @@ final class CodexFeatureController: ObservableObject {
         presentationID: UUID? = nil
     ) {
         let key = activityTrayScreenKey(screenID)
-        let completionIDs = activityTrayPresentations.finishPresentation(screenKey: key)
+        let source = presentationID == nil ? "host_teardown" : "view_disappear"
+        guard let activePresentationID = activityTrayPresentations.presentationID(screenKey: key) else {
+            CodexActivityTrayDiagnostics.log(
+                event: "presentation.finish.ignored",
+                screenKey: key,
+                presentationID: presentationID,
+                completionCount: 0,
+                detail: "reason=missing_presentation source=\(source)"
+            )
+            return
+        }
+        if let presentationID, presentationID != activePresentationID {
+            CodexActivityTrayDiagnostics.log(
+                event: "presentation.finish.ignored",
+                screenKey: key,
+                presentationID: presentationID,
+                completionCount: 0,
+                detail: "reason=stale_presentation source=\(source)"
+            )
+            return
+        }
+        let completionIDs = activityTrayPresentations.finishPresentation(
+            screenKey: key,
+            presentationID: activePresentationID
+        )
         CodexActivityTrayDiagnostics.log(
             event: "presentation.finish",
             screenKey: key,
-            presentationID: presentationID,
-            completionCount: completionIDs.count
+            presentationID: activePresentationID,
+            completionCount: completionIDs.count,
+            detail: "source=\(source)"
         )
         guard !completionIDs.isEmpty else { return }
-        acknowledgeCompletions(completionIDs: completionIDs)
+        acknowledgeCompletions(
+            completionIDs: completionIDs,
+            screenKey: key,
+            presentationID: activePresentationID,
+            source: source
+        )
     }
 
     func finishAllActivityTrayPresentations() {
         for key in activityTrayPresentations.activeScreenKeys {
-            let completionIDs = activityTrayPresentations.finishPresentation(screenKey: key)
+            guard let presentationID = activityTrayPresentations.presentationID(screenKey: key) else {
+                continue
+            }
+            let completionIDs = activityTrayPresentations.finishPresentation(
+                screenKey: key,
+                presentationID: presentationID
+            )
+            CodexActivityTrayDiagnostics.log(
+                event: "presentation.finish",
+                screenKey: key,
+                presentationID: presentationID,
+                completionCount: completionIDs.count,
+                detail: "source=runtime_stop"
+            )
             guard !completionIDs.isEmpty else { continue }
-            acknowledgeCompletions(completionIDs: completionIDs)
+            acknowledgeCompletions(
+                completionIDs: completionIDs,
+                screenKey: key,
+                presentationID: presentationID,
+                source: "runtime_stop"
+            )
         }
     }
 
-    func recordCompletionPresentations(completionIDs: Set<UUID>) {
+    func recordCompletionPresentations(
+        completionIDs: Set<UUID>,
+        screenKey: String = "all",
+        presentationID: UUID? = nil
+    ) {
         guard Defaults[.enableCodexIntegration] else { return }
+        let presentedBefore = Set(store.snapshot.presentedCompletionIDs ?? [])
         let effects = store.recordCompletionPresentations(completionIDs: completionIDs)
-        guard !effects.isEmpty else { return }
+        guard !effects.isEmpty else {
+            CodexActivityTrayDiagnostics.log(
+                event: "presentation.record.skipped",
+                screenKey: screenKey,
+                presentationID: presentationID,
+                completionCount: completionIDs.count,
+                detail: "reason=no_state_change"
+            )
+            return
+        }
 
         do {
             try repository.save(store.snapshot)
             snapshot = store.snapshot
+            let presentedAfter = Set(snapshot.presentedCompletionIDs ?? [])
+            CodexActivityTrayDiagnostics.log(
+                event: "presentation.recorded",
+                screenKey: screenKey,
+                presentationID: presentationID,
+                completionCount: presentedAfter.subtracting(presentedBefore).count
+            )
             lastError = nil
         } catch {
+            let nsError = error as NSError
+            CodexActivityTrayDiagnostics.log(
+                event: "presentation.record.failed",
+                screenKey: screenKey,
+                presentationID: presentationID,
+                completionCount: completionIDs.count,
+                detail: "error_domain=\(nsError.domain) error_code=\(nsError.code)"
+            )
             lastError = "记录 Codex 完成展示状态失败：\(error.localizedDescription)"
         }
     }
@@ -294,10 +396,26 @@ final class CodexFeatureController: ObservableObject {
         }
     }
 
-    func acknowledgeCompletions(completionIDs: Set<UUID>) {
+    func acknowledgeCompletions(
+        completionIDs: Set<UUID>,
+        screenKey: String = "all",
+        presentationID: UUID? = nil,
+        source: String = "direct"
+    ) {
         guard Defaults[.enableCodexIntegration] else { return }
+        let acknowledgedBefore = Set(store.snapshot.acknowledgedCompletionIDs ?? [])
+        let unreadBefore = store.snapshot.unacknowledgedCompletions.count
         let effects = store.acknowledgeCompletions(completionIDs: completionIDs)
-        guard !effects.isEmpty else { return }
+        guard !effects.isEmpty else {
+            CodexActivityTrayDiagnostics.log(
+                event: "completion.acknowledge.skipped",
+                screenKey: screenKey,
+                presentationID: presentationID,
+                completionCount: completionIDs.count,
+                detail: "reason=no_state_change source=\(source) unread_before=\(unreadBefore)"
+            )
+            return
+        }
 
         do {
             try repository.save(store.snapshot)
@@ -308,13 +426,24 @@ final class CodexFeatureController: ObservableObject {
                 livenessPolicy: livenessPolicy,
                 interruptActivePulse: true
             )
+            let acknowledgedAfter = Set(snapshot.acknowledgedCompletionIDs ?? [])
             CodexActivityTrayDiagnostics.log(
                 event: "completion.acknowledged",
-                screenKey: "all",
-                completionCount: completionIDs.count
+                screenKey: screenKey,
+                presentationID: presentationID,
+                completionCount: acknowledgedAfter.subtracting(acknowledgedBefore).count,
+                detail: "source=\(source) exposed_checkpoints=\(completionIDs.count) unread_before=\(unreadBefore) unread_after=\(snapshot.unacknowledgedCompletions.count)"
             )
             lastError = nil
         } catch {
+            let nsError = error as NSError
+            CodexActivityTrayDiagnostics.log(
+                event: "completion.acknowledge.failed",
+                screenKey: screenKey,
+                presentationID: presentationID,
+                completionCount: completionIDs.count,
+                detail: "source=\(source) error_domain=\(nsError.domain) error_code=\(nsError.code)"
+            )
             lastError = "更新 Codex 完成状态失败：\(error.localizedDescription)"
         }
     }
@@ -324,17 +453,6 @@ final class CodexFeatureController: ObservableObject {
             return Self.defaultActivityTrayScreenKey
         }
         return screenID
-    }
-
-    private func activityTrayUnreadCompletionIDs() -> [UUID] {
-        CodexActivityTrayBuilder().build(
-            from: snapshot,
-            preferences: activityTrayPreferences,
-            livenessPolicy: livenessPolicy
-        ).buckets
-            .first { $0.bucket == .unreadCompleted }?
-            .items
-            .compactMap(\.completionID) ?? []
     }
 
     func openCodexConversation(sessionID: String) {

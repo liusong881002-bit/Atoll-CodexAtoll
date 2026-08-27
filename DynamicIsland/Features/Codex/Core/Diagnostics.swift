@@ -16,7 +16,7 @@ enum CodexActivityTrayDiagnostics {
     ) {
         let message = [
             "event=\(event)",
-            "screen=\(screenKey)",
+            "screen=\(diagnosticScreenToken(for: screenKey))",
             "presentation=\(presentationID?.uuidString ?? "none")",
             "completion_count=\(completionCount)",
             detail,
@@ -24,6 +24,15 @@ enum CodexActivityTrayDiagnostics {
         .compactMap { $0 }
         .joined(separator: " ")
         os_log("%{public}@", log: activityLog, type: .info, message)
+    }
+
+    private static func diagnosticScreenToken(for screenKey: String) -> String {
+        switch screenKey {
+        case "all": return "all"
+        case "__default__": return "default"
+        default:
+            return "screen-\(String(UInt(bitPattern: screenKey.hashValue), radix: 16))"
+        }
     }
 }
 

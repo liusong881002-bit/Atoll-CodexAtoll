@@ -179,6 +179,25 @@ struct CodexCompletionAcknowledgementTests {
             "acknowledging exact completion IDs does not consume a newer turn in the same session"
         )
 
+        var latestVisibleCompletionSnapshot = CodexTaskStoreSnapshot(
+            savedAt: now,
+            recentCompletions: [sameSessionOlder, sameSessionNewer],
+            presentedCompletionIDs: [sameSessionOlder.id, sameSessionNewer.id]
+        )
+        let latestVisibleCompletionEffects = reducer.acknowledgeCompletions(
+            completionIDs: [sameSessionNewer.id],
+            state: &latestVisibleCompletionSnapshot,
+            now: now
+        )
+        try expect(
+            latestVisibleCompletionEffects == [.persist, .refreshPresentation]
+                && Set(latestVisibleCompletionSnapshot.acknowledgedCompletionIDs ?? [])
+                    == [sameSessionOlder.id, sameSessionNewer.id]
+                && latestVisibleCompletionSnapshot.presentedCompletionIDs?.isEmpty == true
+                && latestVisibleCompletionSnapshot.unacknowledgedCompletions.isEmpty,
+            "acknowledging the latest visible completion clears older unread turns represented by the same deduplicated session card"
+        )
+
         var resumedSnapshot = CodexTaskStoreSnapshot(
             savedAt: now,
             recentCompletions: [third]

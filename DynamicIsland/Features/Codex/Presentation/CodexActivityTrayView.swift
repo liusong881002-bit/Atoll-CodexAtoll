@@ -19,8 +19,7 @@ struct CodexActivityTrayView: View {
     @State private var collapsedBuckets: Set<CodexActivityBucket> =
         CodexActivityTrayExpansionPolicy.defaultCollapsedBuckets()
     @State private var collapsedProjects: Set<String> = []
-    @State private var itemFrames: [String: CGRect] = [:]
-    @State private var viewportSize: CGSize = .zero
+    @State private var presentation = CodexActivityTrayPresentationLifecycle()
 
     private let defaultHistoryLimit = 10
     private static let scrollCoordinateSpace = "codex-activity-tray-scroll"
@@ -62,14 +61,22 @@ struct CodexActivityTrayView: View {
             }
             .coordinateSpace(name: Self.scrollCoordinateSpace)
             .onPreferenceChange(CodexActivityItemFramePreferenceKey.self) { frames in
-                itemFrames = frames
-                viewportSize = viewportProxy.size
-                recordVisibleCompletions()
+                recordVisibleCompletions(
+                    itemFrames: frames,
+                    viewportSize: viewportProxy.size
+                )
             }
         }
         .onAppear {
             resetPresentationState()
-            recordVisibleCompletions()
+            _ = beginPresentationIfNeeded()
+        }
+        .onDisappear {
+            guard let presentationID = presentation.invalidate() else { return }
+            controller.finishActivityTrayPresentation(
+                screenID: vm.screen,
+                presentationID: presentationID
+            )
         }
         .accessibilityIdentifier("codex-activity-tray")
     }
@@ -336,7 +343,11 @@ struct CodexActivityTrayView: View {
         }
     }
 
-    private func recordVisibleCompletions() {
+    private func recordVisibleCompletions(
+        itemFrames: [String: CGRect],
+        viewportSize: CGSize
+    ) {
+        guard beginPresentationIfNeeded() else { return }
         let unreadItems = model.buckets
             .first { $0.bucket == .unreadCompleted }?
             .items ?? []
@@ -347,8 +358,18 @@ struct CodexActivityTrayView: View {
         controller.updateActivityTrayVisibility(
             visibleItems: unreadItems.filter { visibleItemIDs.contains($0.id) },
             allUnreadItems: unreadItems,
-            screenID: vm.screen
+            screenID: vm.screen,
+            presentationID: presentation.id
         )
+    }
+
+    private func beginPresentationIfNeeded() -> Bool {
+        presentation.beginIfNeeded { presentationID in
+            controller.beginActivityTrayPresentation(
+                screenID: vm.screen,
+                presentationID: presentationID
+            )
+        }
     }
 
     private var ignoredItemsView: some View {

@@ -210,128 +210,46 @@ struct CodexActivityTrayVisibilityPolicy {
     }
 }
 
-struct CodexActivityTrayPresentationExposure: Equatable, Sendable {
-    let presentationID: UUID
-    let visibleItemIDs: Set<String>
-}
-
-struct CodexActivityTrayPresentationVisibility: Equatable, Sendable {
-    private var presentationID: UUID?
-    private var itemFrames: [String: CGRect] = [:]
-    private var viewportSize: CGSize = .zero
-
-    mutating func updateLayout(
-        itemFrames: [String: CGRect],
-        viewportSize: CGSize
-    ) {
-        self.itemFrames = itemFrames
-        self.viewportSize = viewportSize
+struct CodexActivityTrayPresentationLifecycle: Equatable, Sendable {
+    private enum Phase: Equatable, Sendable {
+        case pending
+        case begun
+        case invalidated
     }
 
-    mutating func beginPresentation(id: UUID) {
-        presentationID = id
+    let id: UUID
+    private var phase: Phase = .pending
+
+    init(id: UUID = UUID()) {
+        self.id = id
     }
 
-    mutating func finishPresentation() -> UUID? {
-        let finishedPresentationID = presentationID
-        self = CodexActivityTrayPresentationVisibility()
-        return finishedPresentationID
-    }
-
-    var activeExposure: CodexActivityTrayPresentationExposure? {
-        guard let presentationID else { return nil }
-        return CodexActivityTrayPresentationExposure(
-            presentationID: presentationID,
-            visibleItemIDs: CodexActivityTrayVisibilityPolicy.visibleItemIDs(
-                itemFrames: itemFrames,
-                viewportBounds: CGRect(origin: .zero, size: viewportSize)
-            )
-        )
-    }
-}
-
-struct CodexActivityTrayExposureDecision: Equatable {
-    let completionIDsToRecord: Set<UUID>
-    // Kept in the decision shape for callers that already consume it. Read
-    // acknowledgement is committed when the tray is dismissed, never while
-    // the current presentation is still open.
-    let sessionIDsToAcknowledge: Set<String>
-    let handledCompletionIDs: Set<UUID>
-}
-
-struct CodexActivityTrayExposurePolicy {
-    static func decision(
-        for visibleItems: [CodexActivityTrayItem],
-        previouslyPresentedIDs: Set<UUID>,
-        handledCompletionIDs: Set<UUID>
-    ) -> CodexActivityTrayExposureDecision {
-        let eligibleItems = visibleItems.filter { item in
-            guard let completionID = item.completionID else { return false }
-            return !handledCompletionIDs.contains(completionID)
+    mutating func beginIfNeeded(using begin: (UUID) -> Bool) -> Bool {
+        switch phase {
+        case .begun:
+            return true
+        case .invalidated:
+            return false
+        case .pending:
+            guard begin(id) else { return false }
+            phase = .begun
+            return true
         }
-        let eligibleCompletionIDs = Set(eligibleItems.compactMap(\.completionID))
-        return CodexActivityTrayExposureDecision(
-            completionIDsToRecord: eligibleCompletionIDs.subtracting(previouslyPresentedIDs),
-            sessionIDsToAcknowledge: [],
-            handledCompletionIDs: eligibleCompletionIDs
-        )
     }
 
-    static func sessionIDsToAcknowledgeOnDismiss(
-        for exposedItems: [CodexActivityTrayItem]
-    ) -> Set<String> {
-        Set(
-            exposedItems.compactMap { item in
-                guard item.bucket == .unreadCompleted,
-                      item.completionID != nil,
-                      !item.sessionID.isEmpty else { return nil }
-                return item.sessionID
-            }
-        )
-    }
-}
-
-struct CodexActivityTrayReadSession: Equatable, Sendable {
-    private(set) var handledCompletionIDs: Set<UUID> = []
-    private(set) var exposedSessionIDs: Set<String> = []
-
-    mutating func recordExposure(
-        for visibleItems: [CodexActivityTrayItem],
-        previouslyPresentedIDs: Set<UUID>
-    ) -> CodexActivityTrayExposureDecision {
-        let decision = CodexActivityTrayExposurePolicy.decision(
-            for: visibleItems,
-            previouslyPresentedIDs: previouslyPresentedIDs,
-            handledCompletionIDs: handledCompletionIDs
-        )
-        guard !decision.handledCompletionIDs.isEmpty else { return decision }
-
-        handledCompletionIDs.formUnion(decision.handledCompletionIDs)
-        exposedSessionIDs.formUnion(
-            CodexActivityTrayExposurePolicy.sessionIDsToAcknowledgeOnDismiss(
-                for: visibleItems
-            )
-        )
-        return decision
-    }
-
-    mutating func finish() -> Set<String> {
-        let sessionIDs = exposedSessionIDs
-        handledCompletionIDs.removeAll()
-        exposedSessionIDs.removeAll()
-        return sessionIDs
+    mutating func invalidate() -> UUID? {
+        let presentationID = phase == .begun ? id : nil
+        phase = .invalidated
+        return presentationID
     }
 }
 
 struct CodexActivityTrayPresentationRegistry: Equatable, Sendable {
+    private static let retiredTokenLimitPerScreen = 32
+
     struct BeginResult: Equatable, Sendable {
         let presentationID: UUID
         let exposedCompletionIDs: Set<UUID>
-    }
-
-    private struct VisibilitySnapshot: Equatable, Sendable {
-        let contentSignature: [UUID]
-        let visibleCompletionIDs: Set<UUID>
     }
 
     private struct Presentation: Equatable, Sendable {
@@ -339,23 +257,26 @@ struct CodexActivityTrayPresentationRegistry: Equatable, Sendable {
         var exposedCompletionIDs: Set<UUID>
     }
 
-    private var visibilityByScreen: [String: VisibilitySnapshot] = [:]
     private var presentationsByScreen: [String: Presentation] = [:]
+    private var retiredPresentationIDsByScreen: [String: [UUID]] = [:]
 
     @discardableResult
     mutating func beginPresentation(
         screenKey: String,
-        contentSignature: [UUID]
-    ) -> BeginResult {
-        var presentation = presentationsByScreen[screenKey]
-            ?? Presentation(id: UUID(), exposedCompletionIDs: [])
-
-        if let visibility = visibilityByScreen[screenKey] {
-            presentation.exposedCompletionIDs.formUnion(
-                visibility.visibleCompletionIDs.intersection(contentSignature)
+        presentationID: UUID
+    ) -> BeginResult? {
+        guard retiredPresentationIDsByScreen[screenKey]?.contains(presentationID) != true else {
+            return nil
+        }
+        if let presentation = presentationsByScreen[screenKey] {
+            guard presentation.id == presentationID else { return nil }
+            return BeginResult(
+                presentationID: presentation.id,
+                exposedCompletionIDs: presentation.exposedCompletionIDs
             )
         }
 
+        let presentation = Presentation(id: presentationID, exposedCompletionIDs: [])
         presentationsByScreen[screenKey] = presentation
         return BeginResult(
             presentationID: presentation.id,
@@ -366,16 +287,13 @@ struct CodexActivityTrayPresentationRegistry: Equatable, Sendable {
     @discardableResult
     mutating func updateVisibility(
         screenKey: String,
+        presentationID: UUID,
         contentSignature: [UUID],
         visibleCompletionIDs: Set<UUID>
-    ) -> Set<UUID> {
+    ) -> Set<UUID>? {
         let eligibleCompletionIDs = visibleCompletionIDs.intersection(contentSignature)
-        visibilityByScreen[screenKey] = VisibilitySnapshot(
-            contentSignature: contentSignature,
-            visibleCompletionIDs: eligibleCompletionIDs
-        )
-
-        guard var presentation = presentationsByScreen[screenKey] else { return [] }
+        guard var presentation = presentationsByScreen[screenKey],
+              presentation.id == presentationID else { return nil }
         let newlyExposedCompletionIDs = eligibleCompletionIDs.subtracting(
             presentation.exposedCompletionIDs
         )
@@ -384,12 +302,33 @@ struct CodexActivityTrayPresentationRegistry: Equatable, Sendable {
         return newlyExposedCompletionIDs
     }
 
-    mutating func finishPresentation(screenKey: String) -> Set<UUID> {
-        presentationsByScreen.removeValue(forKey: screenKey)?.exposedCompletionIDs ?? []
+    mutating func finishPresentation(
+        screenKey: String,
+        presentationID: UUID? = nil
+    ) -> Set<UUID> {
+        guard let presentation = presentationsByScreen[screenKey],
+              presentationID == nil || presentation.id == presentationID else { return [] }
+        presentationsByScreen.removeValue(forKey: screenKey)
+        retirePresentationID(presentation.id, screenKey: screenKey)
+        return presentation.exposedCompletionIDs
+    }
+
+    func presentationID(screenKey: String) -> UUID? {
+        presentationsByScreen[screenKey]?.id
     }
 
     var activeScreenKeys: [String] {
         Array(presentationsByScreen.keys)
+    }
+
+    private mutating func retirePresentationID(_ presentationID: UUID, screenKey: String) {
+        var retiredIDs = retiredPresentationIDsByScreen[screenKey, default: []]
+        guard !retiredIDs.contains(presentationID) else { return }
+        retiredIDs.append(presentationID)
+        if retiredIDs.count > Self.retiredTokenLimitPerScreen {
+            retiredIDs.removeFirst(retiredIDs.count - Self.retiredTokenLimitPerScreen)
+        }
+        retiredPresentationIDsByScreen[screenKey] = retiredIDs
     }
 }
 

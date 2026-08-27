@@ -77,114 +77,76 @@ struct CodexActivityTrayCompletionDeduplicationTests {
             "only completion cards that are materially visible in the drawer count as read"
         )
 
-        let presentationID = UUID()
-        var presentationVisibility = CodexActivityTrayPresentationVisibility()
-        presentationVisibility.updateLayout(
-            itemFrames: [
-                "visible": CGRect(x: 0, y: 20, width: 240, height: 80),
-                "offscreen": CGRect(x: 0, y: 220, width: 240, height: 80),
-            ],
-            viewportSize: CGSize(width: 240, height: 200)
-        )
+        var presentationLifecycle = CodexActivityTrayPresentationLifecycle()
+        var beginCount = 0
         try expect(
-            presentationVisibility.activeExposure == nil,
-            "visible layout arriving before the tray presentation waits for an active session"
+            presentationLifecycle.beginIfNeeded { _ in
+                beginCount += 1
+                return true
+            }
+                && presentationLifecycle.beginIfNeeded { _ in
+                    beginCount += 1
+                    return true
+                }
+                && beginCount == 1,
+            "the first geometry callback can begin the view generation before onAppear without creating a second presentation"
         )
-        presentationVisibility.beginPresentation(id: presentationID)
+        let begunPresentationID = presentationLifecycle.id
         try expect(
-            presentationVisibility.activeExposure?.presentationID == presentationID
-                && presentationVisibility.activeExposure?.visibleItemIDs == ["visible"],
-            "the first visible layout is replayed when the tray presentation starts"
+            presentationLifecycle.invalidate() == begunPresentationID
+                && !presentationLifecycle.beginIfNeeded { _ in true },
+            "a dismissed view generation cannot restart after it has begun"
         )
 
-        let visibleCompletionItems = unreadTray.buckets.first?.items ?? []
-        let firstPresentation = CodexActivityTrayExposurePolicy.decision(
-            for: visibleCompletionItems,
-            previouslyPresentedIDs: [],
-            handledCompletionIDs: []
-        )
+        var neverBegunLifecycle = CodexActivityTrayPresentationLifecycle()
+        var attemptedLateBegin = false
         try expect(
-            firstPresentation.completionIDsToRecord == [latestTurn.id]
-                && firstPresentation.sessionIDsToAcknowledge.isEmpty,
-            "the first visible presentation records exposure without acknowledging the completion"
-        )
-        let repeatedLayoutInSamePresentation = CodexActivityTrayExposurePolicy.decision(
-            for: visibleCompletionItems,
-            previouslyPresentedIDs: [latestTurn.id],
-            handledCompletionIDs: firstPresentation.handledCompletionIDs
-        )
-        try expect(
-            repeatedLayoutInSamePresentation.completionIDsToRecord.isEmpty
-                && repeatedLayoutInSamePresentation.sessionIDsToAcknowledge.isEmpty,
-            "layout updates during one open drawer never count as a second presentation"
-        )
-        let secondPresentation = CodexActivityTrayExposurePolicy.decision(
-            for: visibleCompletionItems,
-            previouslyPresentedIDs: [latestTurn.id],
-            handledCompletionIDs: []
-        )
-        try expect(
-            secondPresentation.completionIDsToRecord.isEmpty
-                && secondPresentation.sessionIDsToAcknowledge.isEmpty,
-            "reopening the drawer does not acknowledge a completion before the prior presentation is dismissed"
-        )
-        try expect(
-            CodexActivityTrayExposurePolicy.sessionIDsToAcknowledgeOnDismiss(
-                for: visibleCompletionItems
-            ) == [latestTurn.sessionID],
-            "dismissing the drawer acknowledges the completion that was browsed during the presentation"
-        )
-
-        var explicitCloseSession = CodexActivityTrayReadSession()
-        let explicitCloseDecision = explicitCloseSession.recordExposure(
-            for: visibleCompletionItems,
-            previouslyPresentedIDs: []
-        )
-        try expect(
-            explicitCloseDecision.handledCompletionIDs == [latestTurn.id]
-                && explicitCloseSession.finish() == [latestTurn.sessionID]
-                && explicitCloseSession.finish().isEmpty,
-            "an explicit tray close acknowledges exposed sessions without relying on onDisappear and is idempotent"
+            neverBegunLifecycle.invalidate() == nil
+                && !neverBegunLifecycle.beginIfNeeded { _ in
+                    attemptedLateBegin = true
+                    return true
+                }
+                && !attemptedLateBegin,
+            "a view dismissed before its first callback cannot be revived by late geometry"
         )
 
         var registry = CodexActivityTrayPresentationRegistry()
         let screenKey = "Built-in Retina Display"
         let firstContentSignature = [latestTurn.id]
-        registry.updateVisibility(
+        let firstRegistryPresentation = registry.beginPresentation(
             screenKey: screenKey,
+            presentationID: UUID()
+        )!
+        try expect(
+            firstRegistryPresentation.exposedCompletionIDs.isEmpty,
+            "opening a tray starts with no completion exposed"
+        )
+        let firstVisibleCompletionIDs = registry.updateVisibility(
+            screenKey: screenKey,
+            presentationID: firstRegistryPresentation.presentationID,
             contentSignature: firstContentSignature,
             visibleCompletionIDs: [latestTurn.id]
         )
-        let firstRegistryPresentation = registry.beginPresentation(
-            screenKey: screenKey,
-            contentSignature: firstContentSignature
-        )
         try expect(
-            firstRegistryPresentation.exposedCompletionIDs == [latestTurn.id],
-            "opening the tray replays the last matching visible layout"
+            firstVisibleCompletionIDs == [latestTurn.id],
+            "the first visible geometry update records the completion in the active presentation"
+        )
+        let repeatedBegin = registry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: firstRegistryPresentation.presentationID
+        )!
+        try expect(
+            repeatedBegin.presentationID == firstRegistryPresentation.presentationID
+                && repeatedBegin.exposedCompletionIDs == [latestTurn.id],
+            "repeated host synchronization keeps the same active presentation"
         )
         try expect(
             registry.finishPresentation(screenKey: screenKey) == [latestTurn.id],
             "closing the first tray presentation returns the exact completion that was visible"
         )
-
-        let repeatedRegistryPresentation = registry.beginPresentation(
-            screenKey: screenKey,
-            contentSignature: firstContentSignature
-        )
         try expect(
-            repeatedRegistryPresentation.exposedCompletionIDs == [latestTurn.id],
-            "reopening an unchanged tray replays visibility without requiring another layout callback"
-        )
-
-        let additionalCompletionID = UUID()
-        let changedContentPresentation = registry.beginPresentation(
-            screenKey: screenKey,
-            contentSignature: [additionalCompletionID, latestTurn.id]
-        )
-        try expect(
-            changedContentPresentation.exposedCompletionIDs == [latestTurn.id],
-            "reopening after unread content changes still replays the previously visible completion"
+            registry.finishPresentation(screenKey: screenKey).isEmpty,
+            "closing an already finished presentation is idempotent"
         )
 
         let newerTurn = CodexCompletionRecord(
@@ -194,57 +156,177 @@ struct CodexActivityTrayCompletionDeduplicationTests {
             resultPreview: "第三轮完成",
             completedAt: now.addingTimeInterval(30)
         )
+        let viewportPresentation = registry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: UUID()
+        )!
         registry.updateVisibility(
             screenKey: screenKey,
-            contentSignature: [newerTurn.id],
-            visibleCompletionIDs: [newerTurn.id]
-        )
-        try expect(
-            registry.finishPresentation(screenKey: screenKey) == [latestTurn.id, newerTurn.id],
-            "an open tray accumulates only completion IDs that were actually visible"
-        )
-
-        registry.updateVisibility(
-            screenKey: screenKey,
-            contentSignature: [latestTurn.id],
+            presentationID: viewportPresentation.presentationID,
+            contentSignature: [latestTurn.id, newerTurn.id],
             visibleCompletionIDs: [latestTurn.id]
         )
-        _ = registry.beginPresentation(
-            screenKey: screenKey,
-            contentSignature: [latestTurn.id]
-        )
-        registry.updateVisibility(
-            screenKey: screenKey,
-            contentSignature: [newerTurn.id],
-            visibleCompletionIDs: []
-        )
         try expect(
-            registry.finishPresentation(screenKey: screenKey) == [latestTurn.id],
-            "a newer completion in the same session is not acknowledged unless it becomes visible"
+            registry.finishPresentation(
+                screenKey: screenKey,
+                presentationID: viewportPresentation.presentationID
+            ) == [latestTurn.id],
+            "a completion below the visible viewport remains unread"
         )
 
+        let scrollingPresentation = registry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: UUID()
+        )!
         registry.updateVisibility(
             screenKey: screenKey,
+            presentationID: scrollingPresentation.presentationID,
+            contentSignature: [latestTurn.id, newerTurn.id],
+            visibleCompletionIDs: [latestTurn.id]
+        )
+        registry.updateVisibility(
+            screenKey: screenKey,
+            presentationID: scrollingPresentation.presentationID,
+            contentSignature: [latestTurn.id, newerTurn.id],
+            visibleCompletionIDs: [latestTurn.id, newerTurn.id]
+        )
+        try expect(
+            registry.finishPresentation(
+                screenKey: screenKey,
+                presentationID: scrollingPresentation.presentationID
+            ) == [latestTurn.id, newerTurn.id],
+            "an open tray accumulates each completion that actually becomes visible"
+        )
+
+        let mainScreenPresentation = registry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: UUID()
+        )!
+        let externalScreenPresentation = registry.beginPresentation(
+            screenKey: "External Display",
+            presentationID: UUID()
+        )!
+        registry.updateVisibility(
+            screenKey: screenKey,
+            presentationID: mainScreenPresentation.presentationID,
             contentSignature: firstContentSignature,
             visibleCompletionIDs: [latestTurn.id]
         )
         registry.updateVisibility(
             screenKey: "External Display",
+            presentationID: externalScreenPresentation.presentationID,
             contentSignature: [newerTurn.id],
             visibleCompletionIDs: [newerTurn.id]
         )
-        _ = registry.beginPresentation(
-            screenKey: screenKey,
-            contentSignature: firstContentSignature
+        try expect(
+            registry.finishPresentation(
+                screenKey: screenKey,
+                presentationID: mainScreenPresentation.presentationID
+            ) == [latestTurn.id]
+                && registry.finishPresentation(
+                    screenKey: "External Display",
+                    presentationID: externalScreenPresentation.presentationID
+                ) == [newerTurn.id],
+            "activity tray presentations remain isolated per screen"
         )
-        _ = registry.beginPresentation(
-            screenKey: "External Display",
-            contentSignature: [newerTurn.id]
+
+        var lateVisibilityRegistry = CodexActivityTrayPresentationRegistry()
+        let dismissedPresentation = lateVisibilityRegistry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: UUID()
+        )!
+        lateVisibilityRegistry.updateVisibility(
+            screenKey: screenKey,
+            presentationID: dismissedPresentation.presentationID,
+            contentSignature: firstContentSignature,
+            visibleCompletionIDs: []
         )
         try expect(
-            registry.finishPresentation(screenKey: screenKey) == [latestTurn.id]
-                && registry.finishPresentation(screenKey: "External Display") == [newerTurn.id],
-            "activity tray presentations remain isolated per screen"
+            lateVisibilityRegistry.finishPresentation(
+                screenKey: screenKey,
+                presentationID: dismissedPresentation.presentationID
+            ).isEmpty,
+            "closing before a completion becomes visible does not acknowledge it"
+        )
+        lateVisibilityRegistry.updateVisibility(
+            screenKey: screenKey,
+            presentationID: dismissedPresentation.presentationID,
+            contentSignature: firstContentSignature,
+            visibleCompletionIDs: [latestTurn.id]
+        )
+        let presentationAfterLateVisibility = lateVisibilityRegistry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: UUID()
+        )!
+        try expect(
+            presentationAfterLateVisibility.exposedCompletionIDs.isEmpty,
+            "a visibility update arriving after dismissal is never replayed into the next presentation"
+        )
+
+        var retiredTokenRegistry = CodexActivityTrayPresentationRegistry()
+        let retiredPresentation = retiredTokenRegistry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: UUID()
+        )!
+        _ = retiredTokenRegistry.finishPresentation(
+            screenKey: screenKey,
+            presentationID: retiredPresentation.presentationID
+        )
+        try expect(
+            retiredTokenRegistry.beginPresentation(
+                screenKey: screenKey,
+                presentationID: retiredPresentation.presentationID
+            ) == nil,
+            "a finished presentation token is one-shot and cannot be revived before the next tray begins"
+        )
+
+        var reopenedRegistry = CodexActivityTrayPresentationRegistry()
+        let firstReopenedPresentation = reopenedRegistry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: UUID()
+        )!
+        _ = reopenedRegistry.finishPresentation(
+            screenKey: screenKey,
+            presentationID: firstReopenedPresentation.presentationID
+        )
+        let secondReopenedPresentation = reopenedRegistry.beginPresentation(
+            screenKey: screenKey,
+            presentationID: UUID()
+        )!
+        try expect(
+            reopenedRegistry.beginPresentation(
+                screenKey: screenKey,
+                presentationID: firstReopenedPresentation.presentationID
+            ) == nil,
+            "a dismissed view generation cannot bind itself to a newly reopened tray"
+        )
+        try expect(
+            reopenedRegistry.finishPresentation(
+                screenKey: screenKey,
+                presentationID: firstReopenedPresentation.presentationID
+            ).isEmpty,
+            "a stale dismissal callback cannot finish a newly reopened tray"
+        )
+        let staleVisibilityUpdate = reopenedRegistry.updateVisibility(
+            screenKey: screenKey,
+            presentationID: firstReopenedPresentation.presentationID,
+            contentSignature: firstContentSignature,
+            visibleCompletionIDs: [latestTurn.id]
+        )
+        let activeVisibilityUpdate = reopenedRegistry.updateVisibility(
+            screenKey: screenKey,
+            presentationID: secondReopenedPresentation.presentationID,
+            contentSignature: firstContentSignature,
+            visibleCompletionIDs: []
+        )
+        try expect(
+            staleVisibilityUpdate == nil
+                && activeVisibilityUpdate?.isEmpty == true
+                && reopenedRegistry.finishPresentation(
+                screenKey: screenKey,
+                presentationID: secondReopenedPresentation.presentationID
+            ).isEmpty,
+            "a visibility callback from the dismissed presentation cannot expose a completion in a newly reopened tray"
         )
         print("CodexActivityTrayCompletionDeduplicationTests: PASS")
     }
