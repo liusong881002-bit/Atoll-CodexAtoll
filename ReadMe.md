@@ -1,12 +1,29 @@
 <p align="center">
   <img src=".github/assets/atoll-logo.png" alt="Atoll logo" width="120">
 </p>
-<h1 align="center">Atoll Codex Integration</h1>
-<p align="center">基于 Atoll 的本地 Codex 任务状态模块</p>
+<h1 align="center">Atoll + Codex + Shelf</h1>
+<p align="center">把 Codex 任务状态和文件暂存带到 MacBook 刘海的 Atoll 分支</p>
 
 > **本项目不是官方 Atoll。** 它基于 [Ebullioscopic/Atoll](https://github.com/Ebullioscopic/Atoll) 开源，并将 Codex 集成作为主要新增能力。
 
-如果你只想了解这个仓库新增了什么，请先看下面的 **Codex 模块**。上游 Atoll 的原始介绍和功能列表已放到后面的“上游 Atoll 基础能力”章节。来源、许可证和差异说明见 [UPSTREAM.md](UPSTREAM.md)、[NOTICE](NOTICE) 和 [LICENSE](LICENSE)。
+如果你只想了解这个仓库新增了什么，先看下面的“当前版本一眼看懂”、**Codex 模块**和 **Shelf 文件暂存**。上游 Atoll 的原始介绍和功能列表放在后面的“上游 Atoll 基础能力”章节。来源、许可证和差异说明见 [UPSTREAM.md](UPSTREAM.md)、[NOTICE](NOTICE) 和 [LICENSE](LICENSE)。
+
+最新本机 Release：[`v2.3.3-1162-local`](https://github.com/liusong881002-bit/Atoll-CodexAtoll/releases/tag/v2.3.3-1162-local)。它包含当前分支的代码和 arm64 DMG；本机构建使用 ad-hoc 签名，适合本机运行与验证。
+
+## 当前版本一眼看懂
+
+这个分支把 Atoll 的刘海交互、Codex 任务状态和 Shelf 文件暂存放在同一个 App 里。日常使用时可以这样理解：
+
+| 能力 | 当前行为 |
+| --- | --- |
+| Codex 状态 | 通过本地 Hooks 接收任务事件，在刘海、任务页和活动托盘显示进行中、等待批准、异常和完成状态。 |
+| Codex 会话 | 每个任务保留自己的 `sessionID`，点击卡片可通过 `codex://threads/<sessionID>` 回到对应对话。 |
+| Shelf 全局拖放 | 打开 **Atoll Settings → Shelf → Drop files anywhere into Shelf** 后，文件可以拖到刘海或其他标签内容区，文本和网页链接不会被全局目标接管。 |
+| Shelf 反馈 | 新文件加入后自动切到 Shelf，显示短暂的“已加入文件暂存”提示，并对新卡片做一次轻量动效。 |
+| 暂存安全 | 去重在后台完成；清空 Shelf 只移除暂存记录和 Atoll 自己创建的临时副本，不删除 Finder 中的原文件。 |
+| 本地边界 | Codex 数据来自 Hooks 和本地状态文件，不读取 transcript，不上传 prompt、源码或终端输出，也不启动集成用网络服务。 |
+
+上游 Atoll 的媒体控制、系统信息、Live Activities、计时器、剪贴板和其他工具仍然保留。
 
 ## Codex 模块
 
@@ -39,7 +56,7 @@ Atoll 通过包内的 `CodexHookHelper` 接收 Codex Hook 事件，并按会话�
 
 如果没有任何活跃任务或未读完成记录，关闭态不占用 Codex 状态位，但展开页仍可以保留 Codex 任务标签和明确的空状态。
 
-![刘海关闭态中的进行中摘要：左侧为 Codex 忙碌图标，右侧显示“1 · 进行中”](https://raw.githubusercontent.com/liusong881002-bit/Atoll-CodexAtoll/main/docs/assets/codex-notch-running-summary.jpg)
+![刘海关闭态中的进行中摘要：左侧为 Codex 忙碌图标，右侧显示“1 · 进行中”](docs/assets/codex-notch-running-summary.jpg)
 
 *图：关闭态只保留一条高优先级计数摘要；截图中 Codex 正在进行 1 个任务。*
 
@@ -88,7 +105,7 @@ Atoll 不代替用户批准或拒绝操作。点击卡片只负责打开对应 C
 
 同一 Codex 会话多轮完成时，活动托盘只保留该会话最新的一张完成卡片；当该会话再次开始新一轮任务，旧完成记录会被确认，新一轮重新进入“进行中”。
 
-![Codex 完成提示：绿色勾选、项目名、完成标签和右侧“1 · 已完成”计数](https://raw.githubusercontent.com/liusong881002-bit/Atoll-CodexAtoll/main/docs/assets/codex-notch-completed.jpg)
+![Codex 完成提示：绿色勾选、项目名、完成标签和右侧“1 · 已完成”计数](docs/assets/codex-notch-completed.jpg)
 
 *图：任务完成后的绿色提示。它用于把注意力带回刘海；随后可从 Codex 任务页或活动托盘打开对应会话。*
 
@@ -134,7 +151,7 @@ Atoll 不代替用户批准或拒绝操作。点击卡片只负责打开对应 C
 
 抽屉关闭时才提交未读确认，因此用户只是打开抽屉、还没真正看到底部内容时，不会误把所有完成任务标记为已读。
 
-![Codex 活动托盘：项目分组、进行中任务、历史完成记录和点击进入会话的任务卡片](https://raw.githubusercontent.com/liusong881002-bit/Atoll-CodexAtoll/main/docs/assets/codex-notch-activity-tray.jpg)
+![Codex 活动托盘：项目分组、进行中任务、历史完成记录和点击进入会话的任务卡片](docs/assets/codex-notch-activity-tray.jpg)
 
 *图：活动托盘按任务状态和项目分组。截图中的运行中卡片显示状态时长、项目名、任务摘要和“继续等待”提示；点击卡片即可回到对应 Codex 对话。*
 
@@ -183,15 +200,31 @@ Codex Hooks = 已安装
 
 进入 **Atoll 设置 → 实用工具 → Codex**，打开集成后点击 **安装或修复**。截图中的 `Codex Hooks：已安装` 是关键：Helper 只负责接收事件，Hooks 才负责让 Codex 把事件发送给 Atoll。只打开显示开关、没有安装 Hooks 时，Atoll 不会凭空收到任务。
 
-![Codex 设置：启用集成并确认 Codex Hooks 已安装](https://raw.githubusercontent.com/liusong881002-bit/Atoll-CodexAtoll/main/docs/assets/codex-settings-hooks.png)
+![Codex 设置：启用集成并确认 Codex Hooks 已安装](docs/assets/codex-settings-hooks.png)
 
 完整绑定步骤、默认路径、首次验收和故障排查见 [Codex 绑定与消息接收设置](docs/CODEX_SETUP.md)。
 
-### 十、完整录屏演示
+### 十、演示截图
 
-[![点击打开完整录屏：从刘海进行中摘要进入活动托盘，再展示完成提示](https://raw.githubusercontent.com/liusong881002-bit/Atoll-CodexAtoll/main/docs/assets/codex-notch-activity-tray.jpg)](https://github.com/liusong881002-bit/Atoll-CodexAtoll/blob/main/docs/assets/codex-notch-demo.mp4)
+上面的截图直接从仓库内的 `docs/assets/` 读取，在 `main`、功能分支和 Tag 页面都能稳定显示。完整录屏没有继续放在 README 的源码路径中，避免留下指向已删除大文件的失效链接；需要下载和运行验证时，请使用最新 Release 中的 DMG。
 
-上图可点击打开完整录屏：[`codex-notch-demo.mp4`](https://github.com/liusong881002-bit/Atoll-CodexAtoll/blob/main/docs/assets/codex-notch-demo.mp4)（约 64 秒，1668×1080，约 24 MB）。这是压缩后的版本，适合在 GitHub 上下载和查看；录屏串联展示了关闭态“进行中”提示、展开后的活动托盘，以及任务完成后的绿色提示。
+## Shelf 文件暂存
+
+Shelf 是 Atoll 里的文件暂存区，适合把准备发送、分享或稍后处理的文件先放在刘海里。它保留原有的拖拽、Quick Look、AirDrop 和 Quick Share 入口，最近版本又补上了全局文件拖放和更明确的清理反馈。
+
+### 把文件放进 Shelf
+
+1. 打开 **Atoll Settings → Shelf**，启用 Shelf 和 **Drop files anywhere into Shelf**。
+2. 从 Finder 拖动文件到刘海，或拖到其他标签的内容区域。
+3. Atoll 只接收文件类拖放；文本和网页链接继续交给当前标签或明确的分享目标处理。
+4. 成功加入后，Atoll 会切到 Shelf，显示短暂的“已加入文件暂存”提示，并让新卡片做一次轻量提示动效。
+
+### 暂存和删除规则
+
+- Shelf 会先用非阻塞的快速标识去重，文件元数据处理放到后台，不拖慢主界面。
+- 卡片上的 **Remove from Shelf only** 只移除暂存记录；`⌘ Delete` 或“清空文件暂存”也不会删除 Finder 中的原文件。
+- Atoll 只会清理自己创建的临时副本，不会碰用户主动拖入的原始文件。
+- **Copy items on drag** 和 **Remove from shelf after dragging** 可以分别控制拖出时的复制和自动移除行为。
 
 ## 上游 Atoll 基础能力
 
@@ -261,7 +294,10 @@ To remove historical caches, logs, test binaries, and old release artifacts whil
 Use `--dry-run` to inspect the candidates first. Use `--all` only when a complete rebuild is intentional; it also removes `DerivedData/Dev`. The script moves candidates to a recoverable Trash quarantine instead of permanently deleting them.
 
 ## Installation
-当前仓库暂未发布独立 DMG。请先按 [Development Run](#development-run) 从源码运行，或使用 Xcode 构建当前分支；这样运行的才是包含 Codex 模块的版本。
+
+最新 arm64 安装包：[`Atoll-2.3.3-1162-arm64-local.dmg`](https://github.com/liusong881002-bit/Atoll-CodexAtoll/releases/download/v2.3.3-1162-local/Atoll-2.3.3-1162-arm64-local.dmg)。下载后将 `Atoll.app` 拖入 `/Applications`，首次打开时按 macOS 提示确认。
+
+这个 Release 使用本机 ad-hoc 签名，未使用 Developer ID 公证，适合本机运行和功能验证。开发时建议使用下面的 Debug 流程，避免把开发缓存和正式安装版混在一起。
 
 ## Quick Start
 - Hover near the notch to expand; click to enter controls.
@@ -327,10 +363,14 @@ Atoll builds upon the work of several open-source projects and draws inspiration
 [![Star History Chart](https://api.star-history.com/svg?repos=Ebullioscopic/Atoll&type=timeline&legend=top-left)](https://www.star-history.com/#Ebullioscopic/Atoll&type=timeline&legend=top-left)
 
 ## Updating Existing Clones
-If you previously cloned DynamicIsland, update the remote to track the Atoll repository:
+
+如果之前克隆的是旧的 Atoll 或 Codex 快照，请把 remote 指向本仓库，再切换到主分支：
 
 ```bash
-git remote set-url origin https://github.com/Ebullioscopic/Atoll.git
+git remote set-url origin https://github.com/liusong881002-bit/Atoll-CodexAtoll.git
+git fetch origin
+git switch main
+git pull --ff-only origin main
 ```
 
 A heartfelt thanks to [TheBoredTeam](https://github.com/TheBoredTeam) for being supportive and being totally awesome, Atoll would not have been possible without Boring.Notch
