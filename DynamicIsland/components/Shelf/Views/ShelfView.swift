@@ -50,6 +50,8 @@ struct ShelfView: View {
     @StateObject var tvm = ShelfStateViewModel.shared
     @StateObject var selection = ShelfSelectionModel.shared
     @StateObject private var quickLookService = QuickLookService()
+    @State private var showClearConfirmation = false
+    @State private var clearConfirmationAutoCloseToken = UUID()
     private let spacing: CGFloat = 8
 
     var body: some View {
@@ -67,6 +69,21 @@ struct ShelfView: View {
             updateQuickLookSelection()
         }
         .quickLookPresenter(using: quickLookService)
+        .onChange(of: showClearConfirmation) { _, isShowing in
+            vm.setAutoCloseSuppression(
+                isShowing,
+                token: clearConfirmationAutoCloseToken
+            )
+        }
+        .onDisappear {
+            vm.setAutoCloseSuppression(
+                false,
+                token: clearConfirmationAutoCloseToken
+            )
+        }
+        .onDeleteCommand {
+            removeSelectedItems()
+        }
     }
     
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -120,12 +137,158 @@ struct ShelfView: View {
 
                     content
                         .padding()
+
+                    if let message = tvm.addFeedbackMessage {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text(message)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.green.opacity(0.55), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.25), radius: 5, y: 2)
+                        .allowsHitTesting(false)
+                        .transition(
+                            .move(edge: .top)
+                                .combined(with: .opacity)
+                                .combined(with: .scale(scale: 0.94))
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 8)
+                    }
+
+                    if !tvm.isEmpty {
+                        VStack {
+                            HStack(spacing: 6) {
+                                if selection.hasSelection {
+                                    Button(action: removeSelectedItems) {
+                                        Image(systemName: "minus.circle")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .frame(width: 24, height: 24)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.white)
+                                    .background(Circle().fill(Color.black.opacity(0.72)))
+                                    .overlay(Circle().stroke(Color.white.opacity(0.16), lineWidth: 1))
+                                    .help("Remove selected items from Shelf (Delete)")
+                                    .accessibilityLabel("Remove selected items from Shelf")
+                                    .keyboardShortcut(.delete, modifiers: [])
+                                }
+
+                                Button(action: {
+                                    // Claim the auto-close suppression before the
+                                    // confirmation dialog moves focus outside the notch.
+                                    vm.setAutoCloseSuppression(
+                                        true,
+                                        token: clearConfirmationAutoCloseToken
+                                    )
+                                    showClearConfirmation = true
+                                }) {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .frame(width: 24, height: 24)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.white)
+                                .background(Circle().fill(Color.black.opacity(0.72)))
+                                .overlay(Circle().stroke(Color.white.opacity(0.16), lineWidth: 1))
+                                .help("Clear Shelf only; original files stay untouched (⌘Delete)")
+                                .accessibilityLabel("Clear Shelf only; original files stay untouched")
+                                .keyboardShortcut(.delete, modifiers: .command)
+                            }
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(10)
+                    }
+
+                    if showClearConfirmation {
+                        clearConfirmationCard
+                            .zIndex(20)
+                    }
                 }
             }
+            .animation(.spring(response: 0.3, dampingFraction: 0.82), value: tvm.addFeedbackMessage)
+            .animation(.spring(response: 0.28, dampingFraction: 0.86), value: showClearConfirmation)
             .transaction { transaction in
                 transaction.animation = vm.animation
             }
             .contentShape(Rectangle())
+    }
+
+    private func removeSelectedItems() {
+        let selectedItems = selection.selectedItems(in: tvm.items)
+        guard !selectedItems.isEmpty else { return }
+        tvm.remove(selectedItems)
+        selection.clear()
+    }
+
+    private var clearConfirmationCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "trash.fill")
+                    .foregroundStyle(.orange)
+                Text("清空文件暂存？")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 0)
+            }
+
+            Text("仅移除 Atoll 中的暂存记录，原文件不会被删除。")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.72))
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+
+                Button("取消") {
+                    showClearConfirmation = false
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(minWidth: 64, minHeight: 28)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.12))
+                )
+
+                Button("清空暂存", role: .destructive) {
+                    tvm.clear()
+                    selection.clear()
+                    showClearConfirmation = false
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .frame(minWidth: 78, minHeight: 28)
+                .background(
+                    Capsule()
+                        .fill(Color.red.opacity(0.16))
+                )
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.34), radius: 10, y: 4)
+        .padding(12)
+        .transition(
+            .scale(scale: 0.96)
+                .combined(with: .opacity)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("清空文件暂存确认")
     }
 
     var content: some View {

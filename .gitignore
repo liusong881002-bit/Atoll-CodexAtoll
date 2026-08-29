@@ -29,6 +29,8 @@ Carthage/Build/
 
 # Derived data
 DerivedData/
+*.profraw
+*.profdata
 
 # Build output
 build/

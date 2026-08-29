@@ -23,6 +23,13 @@
 import Foundation
 import AppKit
 
+struct ShelfAddEvent: Equatable, Sendable {
+    let itemIDs: [UUID]
+    let count: Int
+    let focusShelf: Bool
+    let token: UUID
+}
+
 @MainActor
 final class ShelfStateViewModel: ObservableObject {
     static let shared = ShelfStateViewModel()
@@ -35,12 +42,15 @@ final class ShelfStateViewModel: ObservableObject {
     }
 
     @Published var isLoading: Bool = false
+    @Published private(set) var lastAddEvent: ShelfAddEvent?
+    @Published private(set) var addFeedbackMessage: String?
 
     var isEmpty: Bool { items.isEmpty }
 
     // Queue for deferred bookmark updates to avoid publishing during view updates
     private var pendingBookmarkUpdates: [ShelfItem.ID: Data] = [:]
     private var updateTask: Task<Void, Never>?
+    private var addFeedbackTask: Task<Void, Never>?
     
     // Cache for URL-to-item mapping to avoid resolving all bookmarks for lookup
     private var urlToItemCache: [String: ShelfItem.ID] = [:]
@@ -51,32 +61,87 @@ final class ShelfStateViewModel: ObservableObject {
     }
 
 
-    func add(_ newItems: [ShelfItem]) {
-        guard !newItems.isEmpty else { return }
+    @discardableResult
+    func add(_ newItems: [ShelfItem]) -> ShelfAddEvent? {
+        add(newItems, focusShelf: false)
+    }
+
+    @discardableResult
+    func add(_ newItems: [ShelfItem], focusShelf: Bool) -> ShelfAddEvent? {
+        guard !newItems.isEmpty else { return nil }
         var merged = items
-        // Deduplicate by identityKey while preserving order (existing first)
-        var seen: Set<String> = Set(merged.map { $0.identityKey })
+        // Deduplicate without synchronously resolving security-scoped
+        // bookmarks on the main actor. The resolved identity remains
+        // available for async lookup paths, while insertion uses the stable
+        // bookmark payload as a fast key.
+        var seen: Set<String> = Set(merged.map { $0.fastIdentityKey })
         var addedIDs: [String] = []
         for it in newItems {
-            let key = it.identityKey
+            let key = it.fastIdentityKey
             if !seen.contains(key) {
                 merged.append(it)
                 seen.insert(key)
                 addedIDs.append(it.id.uuidString)
             }
         }
+        guard !addedIDs.isEmpty else { return nil }
+
         items = merged
         invalidateURLCache()
-        if !addedIDs.isEmpty {
-            ExtensionRPCServer.shared.notifyShelfItemsChanged(itemIDs: addedIDs, action: "added")
+        let event = ShelfAddEvent(
+            itemIDs: addedIDs.compactMap(UUID.init(uuidString:)),
+            count: addedIDs.count,
+            focusShelf: focusShelf,
+            token: UUID()
+        )
+        lastAddEvent = event
+        addFeedbackMessage = String(localized: "Added to Shelf")
+        scheduleAddFeedbackReset(for: event)
+        ExtensionRPCServer.shared.notifyShelfItemsChanged(itemIDs: addedIDs, action: "added")
+        return event
+    }
+
+    private func scheduleAddFeedbackReset(for event: ShelfAddEvent) {
+        addFeedbackTask?.cancel()
+        addFeedbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1200))
+            guard !Task.isCancelled, let self,
+                  self.lastAddEvent?.token == event.token else { return }
+            self.lastAddEvent = nil
+            self.addFeedbackMessage = nil
         }
     }
 
     func remove(_ item: ShelfItem) {
-        item.cleanupStoredData()
-        items.removeAll { $0.id == item.id }
+        remove([item])
+    }
+
+    func remove(_ itemsToRemove: [ShelfItem]) {
+        guard !itemsToRemove.isEmpty else { return }
+
+        let ids = Set(itemsToRemove.map(\.id))
+        let removedItems = items.filter { ids.contains($0.id) }
+        guard !removedItems.isEmpty else { return }
+
+        // Publish the in-memory/persisted Shelf change immediately. Cleanup of
+        // Atoll-owned temporary copies is deliberately deferred so the UI and
+        // the clear action never wait on bookmark resolution or file I/O.
+        items.removeAll { ids.contains($0.id) }
         invalidateURLCache()
-        ExtensionRPCServer.shared.notifyShelfItemsChanged(itemIDs: [item.id.uuidString], action: "removed")
+        ExtensionRPCServer.shared.notifyShelfItemsChanged(
+            itemIDs: removedItems.map { $0.id.uuidString },
+            action: "removed"
+        )
+
+        Task { @MainActor in
+            for item in removedItems {
+                await item.cleanupStoredDataAsync()
+            }
+        }
+    }
+
+    func clear() {
+        remove(items)
     }
 
     func updateBookmark(for item: ShelfItem, bookmark: Data) {
@@ -109,13 +174,13 @@ final class ShelfStateViewModel: ObservableObject {
     }
 
 
-    func load(_ providers: [NSItemProvider]) {
+    func load(_ providers: [NSItemProvider], policy: ShelfDropPolicy = .all) {
         guard !providers.isEmpty else { return }
         isLoading = true
         Task { [weak self] in
-            let dropped = await ShelfDropService.items(from: providers)
+            let dropped = await ShelfDropService.items(from: providers, policy: policy)
             await MainActor.run {
-                self?.add(dropped)
+                self?.add(dropped, focusShelf: policy == .filesOnly)
                 self?.isLoading = false
             }
         }
@@ -132,7 +197,7 @@ final class ShelfStateViewModel: ObservableObject {
                     if await bookmark.validate() {
                         keep.append(item)
                     } else {
-                        item.cleanupStoredData()
+                        await item.cleanupStoredDataAsync()
                     }
                 default:
                     keep.append(item)

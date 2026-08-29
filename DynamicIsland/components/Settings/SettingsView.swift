@@ -813,7 +813,7 @@ struct SettingsView: View {
             // Shelf
             SettingsSearchEntry(tab: .shelf, title: "Enable shelf", keywords: ["shelf", "dock"], highlightID: SettingsTab.shelf.highlightID(for: "Enable shelf")),
             SettingsSearchEntry(tab: .shelf, title: "Open shelf tab by default if items added", keywords: ["auto open", "shelf tab"], highlightID: SettingsTab.shelf.highlightID(for: "Open shelf tab by default if items added")),
-            SettingsSearchEntry(tab: .shelf, title: "Expanded drag detection area", keywords: ["shelf", "drag"], highlightID: SettingsTab.shelf.highlightID(for: "Expanded drag detection area")),
+            SettingsSearchEntry(tab: .shelf, title: "Drop files anywhere into Shelf", keywords: ["shelf", "drag", "global drop", "file staging"], highlightID: SettingsTab.shelf.highlightID(for: "Drop files anywhere into Shelf")),
             SettingsSearchEntry(tab: .shelf, title: "Copy items on drag", keywords: ["shelf", "drag", "copy"], highlightID: SettingsTab.shelf.highlightID(for: "Copy items on drag")),
             SettingsSearchEntry(tab: .shelf, title: "Remove from shelf after dragging", keywords: ["shelf", "drag", "remove"], highlightID: SettingsTab.shelf.highlightID(for: "Remove from shelf after dragging")),
             SettingsSearchEntry(tab: .shelf, title: "Quick Share Service", keywords: ["shelf", "share", "airdrop", "localsend"], highlightID: SettingsTab.shelf.highlightID(for: "Quick Share Service")),
@@ -3944,9 +3944,13 @@ struct Shelf: View {
                 .settingsHighlight(id: highlightID("Open shelf tab by default if items added"))
 
                 Defaults.Toggle(key: .expandedDragDetection) {
-                    Text("Expanded drag detection area")
+                    Text("Drop files anywhere into Shelf")
                 }
-                .settingsHighlight(id: highlightID("Expanded drag detection area"))
+                .settingsHighlight(id: highlightID("Drop files anywhere into Shelf"))
+
+                Text("When enabled, files dropped on the notch or another tab's content area are added to Shelf. Explicit share targets keep their existing behavior.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 Defaults.Toggle(key: .copyOnDrag) {
                     Text("Copy items on drag")

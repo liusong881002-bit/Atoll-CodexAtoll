@@ -30,11 +30,15 @@ struct ShelfItemView: View {
     let item: ShelfItem
     @EnvironmentObject var vm: DynamicIslandViewModel
     @ObservedObject var selection = ShelfSelectionModel.shared
+    @ObservedObject private var shelfState = ShelfStateViewModel.shared
     @StateObject private var viewModel: ShelfItemViewModel
     @EnvironmentObject private var quickLookService: QuickLookService
     @State private var showStack = false
     @State private var cachedPreviewImage: NSImage?
     @State private var debouncedDropTarget = false
+    @State private var isHovering = false
+    @State private var addPulse = false
+    @State private var lastAnimatedAddToken: UUID?
 
     private var isSelected: Bool { viewModel.isSelected }
     private var shouldHideDuringDrag: Bool { selection.isDragging && selection.isSelected(item.id) && false }
@@ -45,7 +49,7 @@ struct ShelfItemView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             if !shouldHideDuringDrag {
                 VStack(alignment: .center, spacing: 2) {
                     iconView
@@ -55,9 +59,18 @@ struct ShelfItemView: View {
                 .padding(.vertical, 10)
                 .padding(.horizontal, 5)
                 .background(backgroundView)
+                .overlay {
+                    if addPulse {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.green.opacity(0.9), lineWidth: 2)
+                            .shadow(color: .green.opacity(0.42), radius: 8)
+                    }
+                }
                 .contentShape(Rectangle())
                 .animation(.easeInOut(duration: 0.1), value: debouncedDropTarget)
                 .animation(.easeInOut(duration: 0.1), value: isSelected)
+                .scaleEffect(addPulse ? 1.035 : 1)
+                .animation(.spring(response: 0.28, dampingFraction: 0.7), value: addPulse)
 
                 DraggableClickHandler(
                     item: item,
@@ -71,6 +84,24 @@ struct ShelfItemView: View {
                         viewModel.handleClick(event: event, view: nsview)
                     }
                 )
+
+                if isHovering && !selection.isDragging {
+                    Button {
+                        ShelfStateViewModel.shared.remove(item)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 20, height: 20)
+                            .background(Circle().fill(Color.black.opacity(0.82)))
+                            .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove from Shelf only")
+                    .accessibilityLabel("Remove from Shelf only")
+                    .padding(3)
+                    .zIndex(2)
+                }
             } else {
                 Color.clear
                     .frame(width: 105)
@@ -78,6 +109,7 @@ struct ShelfItemView: View {
                     .padding(.horizontal, 5)
             }
         }
+        .onHover { isHovering = $0 }
         .onChange(of: viewModel.isDropTargeted) { _, targeted in
             vm.dragDetectorTargeting = targeted
             // Debounce drop target state changes
@@ -87,6 +119,7 @@ struct ShelfItemView: View {
             }
         }
         .onAppear {
+            handleShelfAddEvent(shelfState.lastAddEvent)
             // Metadata loading is now done in ViewModel.init via loadMetadata()
             // Pre-render drag preview once on appear
             Task {
@@ -98,6 +131,9 @@ struct ShelfItemView: View {
                 quickLookService.show(urls: urls, selectFirst: true)
             }
         }
+        .onChange(of: shelfState.lastAddEvent) { _, event in
+            handleShelfAddEvent(event)
+        }
         .onChange(of: viewModel.thumbnail) { _, _ in
             // Invalidate cached preview when thumbnail changes
             Task {
@@ -105,6 +141,25 @@ struct ShelfItemView: View {
             }
         }
         .quickLookPresenter(using: quickLookService)
+    }
+
+    private func handleShelfAddEvent(_ event: ShelfAddEvent?) {
+        guard let event,
+              event.itemIDs.contains(item.id),
+              lastAnimatedAddToken != event.token else { return }
+
+        lastAnimatedAddToken = event.token
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) {
+            addPulse = true
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.24)) {
+                addPulse = false
+            }
+        }
     }
 
     // MARK: - View Components

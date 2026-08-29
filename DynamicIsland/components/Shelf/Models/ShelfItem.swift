@@ -214,6 +214,20 @@ struct ShelfItem: Identifiable, Codable, Equatable, Sendable {
         // Handle temporary files
         TemporaryFileStorageService.shared.removeTemporaryFileIfNeeded(at: url)
     }
+
+    /// Removes only Atoll-owned temporary backing data. The original file for
+    /// a Finder-dropped item is never touched because non-temporary items exit
+    /// before any filesystem operation.
+    func cleanupStoredDataAsync() async {
+        guard isTemporary, case let .file(bookmark) = kind else { return }
+
+        let (url, _) = await Bookmark(data: bookmark).resolveAsync()
+        guard let url else { return }
+
+        await Task.detached(priority: .utility) {
+            TemporaryFileStorageService.shared.removeTemporaryFileIfNeeded(at: url)
+        }.value
+    }
 }
 
 private extension ShelfItem {
@@ -250,6 +264,20 @@ private extension ShelfItem {
 
 // MARK: - Identity key for deduplication
 extension ShelfItem {
+    /// Fast, non-blocking identity used while mutating the shelf on the main
+    /// actor. Bookmark resolution is intentionally avoided here because a
+    /// security-scoped bookmark can block while access is being negotiated.
+    var fastIdentityKey: String {
+        switch kind {
+        case .file(let bookmark):
+            return "file-bookmark://" + bookmark.base64EncodedString()
+        case .link(let u):
+            return "link://" + u.absoluteString
+        case .text(let s):
+            return "text://" + s
+        }
+    }
+
     var identityKey: String {
         switch kind {
         case .file(let bookmark):

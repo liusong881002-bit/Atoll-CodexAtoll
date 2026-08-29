@@ -24,17 +24,52 @@ import AppKit
 import Foundation
 import UniformTypeIdentifiers
 
+enum ShelfDropPolicy: Sendable, Equatable {
+    case all
+    case filesOnly
+}
+
 struct ShelfDropService {
+    /// Types accepted by the global notch drop target.
+    ///
+    /// `data` is retained for Finder file promises. Providers are filtered by
+    /// `filesOnly` before they reach the shelf ingestion pipeline, so text and
+    /// web links are not captured by the global target.
+    static let globalSupportedTypes: [UTType] = [.fileURL, .item, .data]
+
     static func items(from providers: [NSItemProvider]) async -> [ShelfItem] {
+        await items(from: providers, policy: .all)
+    }
+
+    static func items(
+        from providers: [NSItemProvider],
+        policy: ShelfDropPolicy
+    ) async -> [ShelfItem] {
         var results: [ShelfItem] = []
 
         for provider in providers {
+            guard accepts(provider, policy: policy) else { continue }
             if let item = await processProvider(provider) {
                 results.append(item)
             }
         }
 
         return results
+    }
+
+    private static func accepts(_ provider: NSItemProvider, policy: ShelfDropPolicy) -> Bool {
+        guard policy == .filesOnly else { return true }
+
+        let hasFileURL = provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        let hasFilePromise = provider.hasItemConformingToTypeIdentifier("com.apple.filepromise")
+        let hasItem = provider.hasItemConformingToTypeIdentifier(UTType.item.identifier)
+        let hasText = provider.hasItemConformingToTypeIdentifier(UTType.text.identifier)
+        let hasURL = provider.hasItemConformingToTypeIdentifier(UTType.url.identifier)
+
+        // A provider advertising a concrete file representation wins. For
+        // generic item providers, reject text/link payloads so a global drop
+        // does not steal content intended for Codex, Notes, or another tab.
+        return hasFileURL || hasFilePromise || (hasItem && !hasText && !hasURL)
     }
 
     static func items(from fileURLs: [URL]) async -> [ShelfItem] {

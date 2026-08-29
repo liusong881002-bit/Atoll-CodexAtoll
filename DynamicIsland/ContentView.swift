@@ -84,6 +84,7 @@ struct ContentView: View {
     @Default(.externalDisplayStyle) var externalDisplayStyle
     @Default(.hideNonNotchUntilHover) var hideNonNotchUntilHover
     @Default(.terminalStickyMode) var terminalStickyMode
+    @Default(.expandedDragDetection) var expandedDragDetection
     
     // Battery settings reactivity
     @Default(.showPowerStatusNotifications) var showPowerStatusNotifications
@@ -762,6 +763,9 @@ struct ContentView: View {
             }
             .onChange(of: coordinator.selectedExtensionExperienceID) { _, _ in
                 synchronizeCodexActivityTrayPresentation()
+            }
+            .onChange(of: shelfState.lastAddEvent) { _, event in
+                handleShelfAddEvent(event)
             }
             .sensoryFeedback(.alignment, trigger: haptics)
             .contextMenu {
@@ -2036,10 +2040,26 @@ struct ContentView: View {
         if lockScreenManager.isLocked {
             EmptyView()
         } else if Defaults[.dynamicShelf] && !Defaults[.enableMinimalisticUI] {
-            Color.clear
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .onDrop(of: [.data], isTargeted: $vm.dragDetectorTargeting) { _ in true }
+            Group {
+                if expandedDragDetection {
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onDrop(
+                            of: ShelfDropService.globalSupportedTypes,
+                            isTargeted: $vm.dragDetectorTargeting
+                        ) { providers in
+                            guard !providers.isEmpty else { return false }
+                            vm.dropEvent = true
+                            ShelfStateViewModel.shared.load(providers, policy: .filesOnly)
+                            return true
+                        }
+                } else {
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+            }
                 .onChange(of: vm.anyDropZoneTargeting) { _, isTargeted in
                     if isTargeted, vm.notchState == .closed {
                         coordinator.currentView = .shelf
@@ -2062,6 +2082,29 @@ struct ContentView: View {
     }
 
     // MARK: - Private Methods
+    private func handleShelfAddEvent(_ event: ShelfAddEvent?) {
+        guard let event, event.count > 0, event.focusShelf else { return }
+
+        let shouldSwitchToShelf = coordinator.currentView != .shelf
+        if shouldSwitchToShelf {
+            withAnimation(.smooth(duration: 0.3)) {
+                coordinator.currentView = .shelf
+            }
+        }
+
+        if vm.notchState == .closed {
+            openNotch()
+        } else if shouldSwitchToShelf {
+            vm.synchronizeNotchSizeForCurrentView()
+        }
+
+        // Reuse the existing system alignment feedback channel so a successful
+        // drop is acknowledged without adding another global audio/HUD surface.
+        if Defaults[.enableHaptics] {
+            haptics.toggle()
+        }
+    }
+
     private func openNotch(targeting liveActivity: ExtensionLiveActivityPayload? = nil) {
         let resolvedLiveActivity = liveActivity ?? activeCodexSneakPeekPayload()
         if let resolvedLiveActivity,

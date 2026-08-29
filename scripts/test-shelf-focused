@@ -11,8 +11,36 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Keep Swift toolchain profile output inside the disposable test directory.
+cd "$test_root"
+export LLVM_PROFILE_FILE="$test_root/%p.profraw"
+
 swiftc \
   -parse-as-library \
   "$repo_root/tests/test_shelf_file_drag_contract.swift" \
   -o "$test_root/test_shelf_file_drag_contract"
 "$test_root/test_shelf_file_drag_contract"
+
+swiftc \
+  -parse-as-library \
+  "$repo_root/tests/test_shelf_global_drop_contract.swift" \
+  -o "$test_root/test_shelf_global_drop_contract"
+"$test_root/test_shelf_global_drop_contract"
+
+swiftc \
+  -parse-as-library \
+  "$repo_root/tests/test_shelf_drop_performance_contract.swift" \
+  -o "$test_root/test_shelf_drop_performance_contract"
+"$test_root/test_shelf_drop_performance_contract"
+
+swiftc \
+  -parse-as-library \
+  "$repo_root/tests/test_shelf_staging_removal_contract.swift" \
+  -o "$test_root/test_shelf_staging_removal_contract"
+"$test_root/test_shelf_staging_removal_contract"
+
+swiftc \
+  -parse-as-library \
+  "$repo_root/tests/test_shelf_drop_feedback_contract.swift" \
+  -o "$test_root/test_shelf_drop_feedback_contract"
+"$test_root/test_shelf_drop_feedback_contract"

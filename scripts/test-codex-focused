@@ -11,6 +11,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The current Swift toolchain writes LLVM profile data into its working
+# directory. Keep those generated files inside the transaction directory so
+# they are removed with the rest of the focused-test output.
+cd "$test_root"
+export LLVM_PROFILE_FILE="$test_root/%p.profraw"
+
 core_sources=(
   "$repo_root/DynamicIsland/Features/Codex/Core/JSONValue.swift"
   "$repo_root/DynamicIsland/Features/Codex/Core/CodexHookEvent.swift"

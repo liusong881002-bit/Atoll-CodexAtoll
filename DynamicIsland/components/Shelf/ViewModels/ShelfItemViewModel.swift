@@ -83,36 +83,38 @@ final class ShelfItemViewModel: ObservableObject {
     }
 
     private func loadDisplayNameFromURL(_ url: URL) async -> String {
-        if url.pathExtension.lowercased() == "json" && url.path.contains("TextBlocks") {
-            do {
-                let data = try Data(contentsOf: url)
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .iso8601
-                struct TextBlockData: Codable {
-                    let content: String
-                    let title: String?
-                    var displayTitle: String {
-                        if let title = title, !title.isEmpty { return title }
-                        let firstLine = content.components(separatedBy: .newlines).first ?? content
-                        if firstLine.count > 50 { return String(firstLine.prefix(47)) + "..." }
-                        return firstLine
+        await Task.detached(priority: .utility) {
+            if url.pathExtension.lowercased() == "json" && url.path.contains("TextBlocks") {
+                do {
+                    let data = try Data(contentsOf: url)
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    struct TextBlockData: Codable {
+                        let content: String
+                        let title: String?
+                        var displayTitle: String {
+                            if let title = title, !title.isEmpty { return title }
+                            let firstLine = content.components(separatedBy: .newlines).first ?? content
+                            if firstLine.count > 50 { return String(firstLine.prefix(47)) + "..." }
+                            return firstLine
+                        }
                     }
-                }
-                if let textData = try? decoder.decode(TextBlockData.self, from: data) {
-                    return textData.displayTitle
-                }
-            } catch { /* fall through */ }
-        } else if url.pathExtension.lowercased() == "webloc" && url.path.contains("WebLocs") {
-            do {
-                let data = try Data(contentsOf: url)
-                if let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                   let urlString = plist["URL"] as? String {
-                    let title = plist["Title"] as? String
-                    return title ?? urlString
-                }
-            } catch { /* fall through */ }
-        }
-        return (try? url.resourceValues(forKeys: [.localizedNameKey]).localizedName) ?? url.lastPathComponent
+                    if let textData = try? decoder.decode(TextBlockData.self, from: data) {
+                        return textData.displayTitle
+                    }
+                } catch { /* fall through */ }
+            } else if url.pathExtension.lowercased() == "webloc" && url.path.contains("WebLocs") {
+                do {
+                    let data = try Data(contentsOf: url)
+                    if let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                       let urlString = plist["URL"] as? String {
+                        let title = plist["Title"] as? String
+                        return title ?? urlString
+                    }
+                } catch { /* fall through */ }
+            }
+            return (try? url.resourceValues(forKeys: [.localizedNameKey]).localizedName) ?? url.lastPathComponent
+        }.value
     }
 
     func loadIcon() async {
@@ -125,7 +127,9 @@ final class ShelfItemViewModel: ObservableObject {
     }
 
     private func loadIconFromURL(_ url: URL) async -> NSImage {
-        return NSWorkspace.shared.icon(forFile: url.path)
+        await Task.detached(priority: .utility) {
+            NSWorkspace.shared.icon(forFile: url.path)
+        }.value
     }
 
     // Async version to resolve file URL without blocking main thread
@@ -486,7 +490,7 @@ final class ShelfItemViewModel: ObservableObject {
         }
 
         menu.addItem(NSMenuItem.separator())
-        addMenuItem(title: "Remove")
+        addMenuItem(title: "Remove from Shelf")
 
         let actionTarget = MenuActionTarget(item: item, view: view, viewModel: self)
 
@@ -668,7 +672,7 @@ final class ShelfItemViewModel: ObservableObject {
                     }
                 }
 
-            case "Remove":
+            case "Remove from Shelf":
                 let selected = ShelfSelectionModel.shared.selectedItems(in: ShelfStateViewModel.shared.items)
                 for it in selected { ShelfActionService.remove(it) }
                 
